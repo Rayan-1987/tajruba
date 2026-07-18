@@ -14,6 +14,7 @@ const NAV_ITEMS: { to: string; label: string; roles?: Role[] }[] = [
   { to: '/dashboard/comments', label: 'ذكاء التعليقات' },
   { to: '/dashboard/service-recovery', label: 'استعادة الخدمة' },
   { to: '/dashboard/proms', label: 'النتائج الصحية (PROMs)' },
+  { to: '/dashboard/phone-survey', label: 'استبيان هاتفي' },
   { to: '/dashboard/survey-studio', label: 'استوديو الاستبيانات', roles: ['SystemAdmin', 'QualityManager'] },
   { to: '/dashboard/data-center', label: 'مركز البيانات', roles: ['SystemAdmin', 'QualityManager'] }
 ];

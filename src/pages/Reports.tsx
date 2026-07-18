@@ -13,6 +13,7 @@ interface QuestionScore {
   mean?: number | null;
   topBoxPercent?: number | null;
   npsScore?: number | null;
+  yesPercent?: number | null;
 }
 
 interface DomainReport {
@@ -133,7 +134,11 @@ export default function Reports() {
                     <div key={q.id} className="flex items-center justify-between text-xs">
                       <span className="text-slate-600">{q.text_ar}</span>
                       <span className="font-semibold text-slate-700">
-                        {q.answer_type === 'nps' ? `NPS ${q.npsScore ?? '-'}` : `${q.mean?.toFixed(2) ?? '-'} / TB ${q.topBoxPercent ?? '-'}%`}
+                        {q.answer_type === 'nps'
+                          ? `NPS ${q.npsScore ?? '-'}`
+                          : q.answer_type === 'yesno'
+                            ? `نعم ${q.yesPercent ?? '-'}%`
+                            : `${q.mean?.toFixed(2) ?? '-'} / TB ${q.topBoxPercent ?? '-'}%`}
                       </span>
                     </div>
                   ))}

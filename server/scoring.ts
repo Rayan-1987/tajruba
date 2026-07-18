@@ -41,6 +41,15 @@ export function scoreNps(values: number[]): { n: number; score: number | null } 
   return { n, score: round2(score) };
 }
 
+/** % of respondents who answered "yes" (1) to a gate/yes-no question. */
+export function scoreYesNo(values: number[]): { n: number; yesPercent: number | null } {
+  const clean = values.filter((v) => Number.isFinite(v));
+  const n = clean.length;
+  if (n === 0) return { n: 0, yesPercent: null };
+  const yesCount = clean.filter((v) => v === 1).length;
+  return { n, yesPercent: round2((yesCount / n) * 100) };
+}
+
 /**
  * Domain score = mean over all raw answer values belonging to questions in the domain
  * (flattened, not a mean-of-means), so questions with more responses aren't under-weighted.

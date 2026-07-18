@@ -8,6 +8,7 @@ interface SurveyQuestion {
   text_ar: string;
   text_en: string;
   answer_type: 'likert5' | 'nps' | 'yesno' | 'text' | 'vas';
+  depends_on_code: string | null;
 }
 
 interface SurveyPayload {
@@ -69,13 +70,26 @@ export default function PatientSurvey() {
     );
   }
 
-  const answeredCount = Object.keys(answers).length;
+  const idByCode: Record<string, string> = {};
+  for (const q of survey.questions) idByCode[q.code] = q.id;
+
+  const isVisible = (q: SurveyQuestion): boolean => {
+    if (!q.depends_on_code) return true;
+    const gateId = idByCode[q.depends_on_code];
+    return answers[gateId] === 1;
+  };
+
+  const visibleQuestions = survey.questions.filter(isVisible);
+  const answeredCount = visibleQuestions.filter((q) => answers[q.id] !== undefined).length;
 
   const submit = async () => {
     setSubmitting(true);
     try {
+      const visibleIds = new Set(visibleQuestions.map((q) => q.id));
       await api.post(`/public/surveys/${token}/submit`, {
-        answers: Object.entries(answers).map(([questionId, value]) => ({ questionId, value })),
+        answers: Object.entries(answers)
+          .filter(([questionId]) => visibleIds.has(questionId))
+          .map(([questionId, value]) => ({ questionId, value })),
         comment: comment.trim() || undefined,
         language: 'ar'
       });
@@ -95,15 +109,46 @@ export default function PatientSurvey() {
         <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-200">
           <div
             className="h-full rounded-full bg-emerald-500 transition-all"
-            style={{ width: `${Math.min(100, (answeredCount / Math.max(1, survey.questions.length)) * 100)}%` }}
+            style={{ width: `${Math.min(100, (answeredCount / Math.max(1, visibleQuestions.length)) * 100)}%` }}
           />
         </div>
       </header>
 
       <main className="mx-auto max-w-xl space-y-4 px-4 py-5">
-        {survey.questions.map((q) => (
+        {visibleQuestions.map((q) => (
           <div key={q.id} className="rounded-2xl bg-white p-4 shadow-sm">
             <p className="mb-3 font-medium text-slate-800">{q.text_ar}</p>
+            {q.answer_type === 'yesno' && (
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAnswers((prev) => ({ ...prev, [q.id]: 1 }))}
+                  className={`flex-1 rounded-xl py-3 text-sm font-semibold transition ${
+                    answers[q.id] === 1 ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  نعم
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setAnswers((prev) => {
+                      const next = { ...prev, [q.id]: 0 };
+                      // Clear any follow-up answers that depended on this gate being "yes".
+                      for (const other of survey.questions) {
+                        if (other.depends_on_code === q.code) delete next[other.id];
+                      }
+                      return next;
+                    })
+                  }
+                  className={`flex-1 rounded-xl py-3 text-sm font-semibold transition ${
+                    answers[q.id] === 0 ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  لا
+                </button>
+              </div>
+            )}
             {q.answer_type === 'likert5' && (
               <div className="flex justify-between gap-1">
                 {[1, 2, 3, 4, 5].map((value) => (
@@ -155,7 +200,7 @@ export default function PatientSurvey() {
       <div className="fixed inset-x-0 bottom-0 border-t border-slate-200 bg-white p-4">
         <button
           type="button"
-          disabled={submitting || answeredCount < survey.questions.length}
+          disabled={submitting || answeredCount < visibleQuestions.length}
           onClick={submit}
           className="mx-auto block w-full max-w-xl rounded-xl bg-emerald-600 py-3 text-center font-semibold text-white transition disabled:cursor-not-allowed disabled:bg-slate-300"
         >

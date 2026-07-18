@@ -1,0 +1,32 @@
+[
+  {
+    "code": "LAB",
+    "nameAr": "المختبر",
+    "nameEn": "Laboratory",
+    "gate": { "textAr": "هل استخدمت خدمة المختبر أثناء هذه الزيارة؟", "textEn": "Did you use the laboratory service during this visit?" },
+    "followUps": [
+      { "textAr": "وقت الانتظار لسحب العينة كان مناسبًا", "textEn": "Waiting time for sample collection was reasonable" },
+      { "textAr": "تعامل موظف المختبر كان احترافيًا", "textEn": "The lab staff's handling was professional" }
+    ]
+  },
+  {
+    "code": "RAD",
+    "nameAr": "الأشعة",
+    "nameEn": "Radiology",
+    "gate": { "textAr": "هل استخدمت خدمة الأشعة أثناء هذه الزيارة؟", "textEn": "Did you use the radiology service during this visit?" },
+    "followUps": [
+      { "textAr": "وقت الانتظار لإجراء الأشعة كان مناسبًا", "textEn": "Waiting time for the imaging procedure was reasonable" },
+      { "textAr": "تم شرح خطوات فحص الأشعة بوضوح", "textEn": "The imaging procedure steps were explained clearly" }
+    ]
+  },
+  {
+    "code": "PHARM",
+    "nameAr": "الصيدلية",
+    "nameEn": "Pharmacy",
+    "gate": { "textAr": "هل استلمت أدوية من صيدلية المستشفى أثناء هذه الزيارة؟", "textEn": "Did you receive medications from the hospital pharmacy during this visit?" },
+    "followUps": [
+      { "textAr": "وقت الانتظار لاستلام الأدوية كان مناسبًا", "textEn": "Waiting time to receive medications was reasonable" },
+      { "textAr": "تم شرح طريقة استخدام الأدوية بوضوح", "textEn": "Medication usage instructions were explained clearly" }
+    ]
+  }
+]

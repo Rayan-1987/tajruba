@@ -21,10 +21,11 @@ import {
   scoreInstrument,
   scoreNps,
   scoreQuestion,
+  scoreYesNo,
   type InstrumentItemValue
 } from './scoring.ts';
-import { provisionTenantDefaults } from './provisioning.ts';
-import type { AnswerType, RecoveryStatus, Role, ServiceType } from './types.ts';
+import { DEFAULT_DEPARTMENT_NAMES, provisionTenantDefaults } from './provisioning.ts';
+import { SERVICE_TYPES, type AnswerType, type RecoveryStatus, type Role, type ServiceType } from './types.ts';
 
 function uid(): string {
   return randomUUID();
@@ -98,13 +99,20 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
 
     const questions = db
       .prepare(
-        `SELECT q.id, q.code, q.text_ar, q.text_en, q.answer_type
+        `SELECT q.id, q.code, q.text_ar, q.text_en, q.answer_type, q.depends_on_code
          FROM template_questions tq
          JOIN questions q ON q.id = tq.question_id
          WHERE tq.template_id = ?
          ORDER BY tq.sort_order`
       )
-      .all(invitation.template_id) as { id: string; code: string; text_ar: string; text_en: string; answer_type: string }[];
+      .all(invitation.template_id) as {
+      id: string;
+      code: string;
+      text_ar: string;
+      text_en: string;
+      answer_type: string;
+      depends_on_code: string | null;
+    }[];
 
     res.json({
       templateName: template.name_ar,
@@ -251,6 +259,13 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       'INSERT INTO users (id, tenant_id, email, password_hash, role, department_id, full_name) VALUES (?, ?, ?, ?, ?, NULL, ?)'
     ).run(adminId, tenantId, adminEmail, hashPassword(adminPassword), 'SystemAdmin', adminFullName);
 
+    const insertDepartment = db.prepare(
+      'INSERT INTO departments (id, tenant_id, facility_id, name_ar, name_en, service_type) VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    for (const service of SERVICE_TYPES) {
+      insertDepartment.run(uid(), tenantId, facilityId, DEFAULT_DEPARTMENT_NAMES[service].ar, DEFAULT_DEPARTMENT_NAMES[service].en, service);
+    }
+
     provisionTenantDefaults(db, root, tenantId);
 
     logAudit(db, tenantId, adminId, 'tenant_registered', 'tenant', tenantId, { hospitalNameEn });
@@ -327,7 +342,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       ...t,
       questions: db
         .prepare(
-          `SELECT q.id, q.code, q.text_ar, q.text_en, q.answer_type
+          `SELECT q.id, q.code, q.text_ar, q.text_en, q.answer_type, q.depends_on_code
            FROM template_questions tq JOIN questions q ON q.id = tq.question_id
            WHERE tq.template_id = ? ORDER BY tq.sort_order`
         )
@@ -382,14 +397,18 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
 
         if (q.answer_type === 'nps') {
           const nps = scoreNps(values);
-          return { ...q, n: nps.n, mean: null, topBoxPercent: null, npsScore: nps.score };
+          return { ...q, n: nps.n, mean: null, topBoxPercent: null, npsScore: nps.score, yesPercent: null };
+        }
+        if (q.answer_type === 'yesno') {
+          const yesNo = scoreYesNo(values);
+          return { ...q, n: yesNo.n, mean: null, topBoxPercent: null, npsScore: null, yesPercent: yesNo.yesPercent };
         }
         const score = scoreQuestion(q.id, values);
-        return { ...q, ...score, npsScore: null };
+        return { ...q, ...score, npsScore: null, yesPercent: null };
       });
 
       const allDomainValues = questionScores
-        .filter((q) => q.answer_type !== 'nps')
+        .filter((q) => q.answer_type !== 'nps' && q.answer_type !== 'yesno')
         .flatMap((q) => {
           const values = (
             db
@@ -591,6 +610,106 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       }
       logAudit(db, req.user!.tenantId, req.user!.id, 'invitations_bulk_created', 'survey_invitation', null, { count: created });
       res.status(201).json({ created });
+    }
+  );
+
+  // Staff-assisted phone survey: an agent conducts the survey over a phone call and
+  // enters the patient's answers on their behalf.
+  router.post(
+    '/phone-survey/submit',
+    requireRole('SystemAdmin', 'QualityManager', 'DepartmentManager'),
+    express.json({ limit: '64kb' }),
+    (req: Request, res: Response) => {
+      const body = req.body as {
+        templateId?: string;
+        departmentId?: string;
+        patientPhone?: string;
+        answers?: { questionId: string; value: number }[];
+        comment?: string;
+      };
+      if (!body.templateId || !body.departmentId || !body.patientPhone || !Array.isArray(body.answers)) {
+        res.status(400).json({ error: 'invalid_payload' });
+        return;
+      }
+      if (req.user!.role === 'DepartmentManager' && body.departmentId !== req.user!.departmentId) {
+        res.status(403).json({ error: 'forbidden' });
+        return;
+      }
+      const template = db
+        .prepare('SELECT id, service_type FROM survey_templates WHERE id = ? AND tenant_id = ?')
+        .get(body.templateId, req.user!.tenantId) as { id: string; service_type: string } | undefined;
+      if (!template) {
+        res.status(404).json({ error: 'template_not_found' });
+        return;
+      }
+      const department = db
+        .prepare('SELECT id FROM departments WHERE id = ? AND tenant_id = ?')
+        .get(body.departmentId, req.user!.tenantId);
+      if (!department) {
+        res.status(404).json({ error: 'department_not_found' });
+        return;
+      }
+
+      const validQuestionIds = new Set(
+        (
+          db
+            .prepare(
+              `SELECT q.id FROM template_questions tq JOIN questions q ON q.id = tq.question_id WHERE tq.template_id = ?`
+            )
+            .all(template.id) as { id: string }[]
+        ).map((r) => r.id)
+      );
+
+      const now = new Date().toISOString();
+      const invitationId = uid();
+      db.prepare(
+        `INSERT INTO survey_invitations
+         (id, tenant_id, template_id, department_id, service_type, token_hash, patient_phone_hash, channel, status, expires_at, sent_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'phone', 'completed', ?, ?, ?)`
+      ).run(invitationId, req.user!.tenantId, template.id, body.departmentId, template.service_type, sha256(uid()), sha256(body.patientPhone), now, now, now);
+
+      const responseId = uid();
+      db.prepare(
+        'INSERT INTO survey_responses (id, invitation_id, tenant_id, started_at, submitted_at, language, mode) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run(responseId, invitationId, req.user!.tenantId, now, now, 'ar', 'phone');
+
+      const insertAnswer = db.prepare('INSERT INTO answers (id, response_id, question_id, value_numeric) VALUES (?, ?, ?, ?)');
+      for (const answer of body.answers) {
+        if (!validQuestionIds.has(answer.questionId)) continue;
+        if (typeof answer.value !== 'number' || !Number.isFinite(answer.value)) continue;
+        insertAnswer.run(uid(), responseId, answer.questionId, answer.value);
+      }
+
+      if (body.comment && body.comment.trim().length > 0) {
+        const rawText = body.comment.trim().slice(0, 2000);
+        const redacted = redactPii(rawText);
+        const analyzer = createDefaultAnalyzer();
+        const analysis = analyzer.analyze(redacted);
+        const commentId = uid();
+        db.prepare(
+          'INSERT INTO comments (id, response_id, tenant_id, department_id, raw_text, redacted_text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).run(commentId, responseId, req.user!.tenantId, body.departmentId, rawText, redacted, now);
+        db.prepare(
+          'INSERT INTO comment_analyses (id, comment_id, sentiment, category, severity, analyzer) VALUES (?, ?, ?, ?, ?, ?)'
+        ).run(uid(), commentId, analysis.sentiment, analysis.category, analysis.severity, analysis.analyzer);
+        if (shouldAlert(analysis.severity)) {
+          db.prepare('INSERT INTO comment_alerts (id, comment_id, tenant_id, severity) VALUES (?, ?, ?, ?)').run(
+            uid(),
+            commentId,
+            req.user!.tenantId,
+            analysis.severity
+          );
+        }
+        if (analysis.severity >= 3) {
+          db.prepare(
+            `INSERT INTO service_recovery_cases (id, comment_id, tenant_id, department_id, status, opened_at)
+             VALUES (?, ?, ?, ?, 'new', ?)`
+          ).run(uid(), commentId, req.user!.tenantId, body.departmentId, now);
+        }
+      }
+
+      logAudit(db, req.user!.tenantId, req.user!.id, 'phone_survey_submitted', 'survey_response', responseId, null);
+      res.status(201).json({ ok: true });
     }
   );
 

@@ -150,13 +150,12 @@ export function seedDatabase(db: Db, root: string): void {
   insertFacility.run(facilityId, tenantId, 'المستشفى الرئيسي', 'Main Campus');
 
   const serviceDeptNames: Record<ServiceType, { ar: string; en: string }> = {
-    ED: { ar: 'الطوارئ', en: 'Emergency Department' },
+    MP: { ar: 'الممارسة الطبية (العيادات)', en: 'Medical Practice Clinics' },
     IP: { ar: 'التنويم - الباطني', en: 'Inpatient - Internal Medicine' },
-    OP: { ar: 'العيادات الخارجية', en: 'Outpatient Clinics' },
+    ED: { ar: 'الطوارئ', en: 'Emergency Department' },
+    AS: { ar: 'الجراحة النهارية', en: 'Ambulatory Surgery' },
     HH: { ar: 'الرعاية المنزلية', en: 'Home Health' },
-    LAB: { ar: 'المختبر', en: 'Laboratory' },
-    RAD: { ar: 'الأشعة', en: 'Radiology' },
-    PHARM: { ar: 'الصيدلية', en: 'Pharmacy' }
+    BB: { ar: 'بنك الدم', en: 'Blood Bank' }
   };
   const departmentIds: Record<ServiceType, string> = {} as Record<ServiceType, string>;
   for (const [service, names] of Object.entries(serviceDeptNames) as [ServiceType, { ar: string; en: string }][]) {
@@ -223,12 +222,14 @@ export function seedDatabase(db: Db, root: string): void {
         insertAnswer.run(uid(), responseId, questionIds[question.code], value);
       }
 
-      // ~20% of responses include a free-text comment.
-      if (rng() < 0.2) {
-        const rawText =
-          service === 'ED' && commentIndex === 0
-            ? 'أشعر بألم شديد بالصدر منذ الخروج ولم يتابع معي أحد.'
-            : commentPool[commentIndex % commentPool.length];
+      // The very first ED response always carries the critical chest-pain comment, so the
+      // demo (and tests) always have at least one high-severity service recovery case to show,
+      // regardless of how the deterministic RNG sequence shifts as the question bank changes.
+      const forceCriticalComment = service === 'ED' && i === 0;
+      if (forceCriticalComment || rng() < 0.2) {
+        const rawText = forceCriticalComment
+          ? 'أشعر بألم شديد بالصدر منذ الخروج ولم يتابع معي أحد.'
+          : commentPool[commentIndex % commentPool.length];
         commentIndex += 1;
         const redacted = redactPii(rawText);
         const analysis = analyzer.analyze(redacted);
@@ -262,7 +263,8 @@ export function seedDatabase(db: Db, root: string): void {
   const demoTokens: { token: string; service: ServiceType }[] = [
     { token: 'demo-ed-token', service: 'ED' },
     { token: 'demo-ip-token', service: 'IP' },
-    { token: 'demo-op-token', service: 'OP' }
+    { token: 'demo-mp-token', service: 'MP' },
+    { token: 'demo-as-token', service: 'AS' }
   ];
   for (const demo of demoTokens) {
     insertInvitation.run(
@@ -337,7 +339,7 @@ export function seedDatabase(db: Db, root: string): void {
   }
 
   generatePathwayEpisodes('KNEE_REPLACEMENT', departmentIds.IP, 10, 'د. جراح عظام');
-  generatePathwayEpisodes('LOW_BACK_PAIN', departmentIds.OP, 6, 'د. استشاري ظهر');
+  generatePathwayEpisodes('LOW_BACK_PAIN', departmentIds.MP, 6, 'د. استشاري ظهر');
 
   // --- Audit trail sample ---------------------------------------------------
   insertAudit.run(uid(), tenantId, adminId, 'seed_completed', 'system', null, JSON.stringify({ note: 'Demo data generated' }));

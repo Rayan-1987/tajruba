@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 
 export default function Login() {
@@ -68,6 +68,12 @@ export default function Login() {
           <p>department@tajruba.sa / Department123!</p>
           <p>executive@tajruba.sa / Executive123!</p>
         </div>
+        <p className="mt-4 text-center text-sm text-slate-500">
+          مستشفى جديد؟{' '}
+          <Link to="/register" className="font-semibold text-emerald-600 hover:underline">
+            سجّل حساب مستشفاك
+          </Link>
+        </p>
       </div>
     </div>
   );

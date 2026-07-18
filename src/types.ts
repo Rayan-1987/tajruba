@@ -1,15 +1,14 @@
 export type Role = 'SystemAdmin' | 'QualityManager' | 'DepartmentManager' | 'ExecutiveViewer';
 
-export type ServiceType = 'ED' | 'IP' | 'OP' | 'HH' | 'LAB' | 'RAD' | 'PHARM';
+export type ServiceType = 'MP' | 'IP' | 'ED' | 'AS' | 'HH' | 'BB';
 
 export const SERVICE_LABELS_AR: Record<ServiceType, string> = {
-  ED: 'الطوارئ',
+  MP: 'الممارسة الطبية (العيادات)',
   IP: 'التنويم',
-  OP: 'العيادات الخارجية',
+  ED: 'الطوارئ',
+  AS: 'الجراحة النهارية',
   HH: 'الرعاية المنزلية',
-  LAB: 'المختبر',
-  RAD: 'الأشعة',
-  PHARM: 'الصيدلية'
+  BB: 'بنك الدم'
 };
 
 export const CATEGORY_LABELS_AR: Record<string, string> = {

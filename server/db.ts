@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS questions (
   requires_alert INTEGER NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1,
   sort_order INTEGER NOT NULL DEFAULT 0,
+  depends_on_code TEXT,
   UNIQUE(tenant_id, code)
 );
 CREATE INDEX IF NOT EXISTS idx_questions_tenant ON questions(tenant_id);
