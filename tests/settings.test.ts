@@ -155,3 +155,87 @@ test('HIS webhook rejects missing/invalid/disabled API keys and accepts a valid 
     db.close();
   }
 });
+
+test('a number on the Do-Not-Contact list is never invited', async () => {
+  const { server, baseUrl, db } = await startServer();
+  try {
+    const adminCookie = await login(baseUrl, 'admin@tajruba.sa', 'Tajruba123!');
+    const departments = (await (await fetch(`${baseUrl}/api/departments`, { headers: { cookie: adminCookie } })).json()) as {
+      departments: { id: string; service_type: string }[];
+    };
+    const templates = (await (await fetch(`${baseUrl}/api/templates`, { headers: { cookie: adminCookie } })).json()) as {
+      templates: { id: string; service_type: string }[];
+    };
+    const edDept = departments.departments.find((d) => d.service_type === 'ED')!;
+    const edTemplate = templates.templates.find((t) => t.service_type === 'ED')!;
+
+    const addRes = await fetch(`${baseUrl}/api/settings/do-not-contact`, {
+      method: 'POST',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ phone: '0511111111', reason: 'طلب المريض عدم التواصل' })
+    });
+    assert.equal(addRes.status, 201);
+
+    const listRes = await fetch(`${baseUrl}/api/settings/do-not-contact`, { headers: { cookie: adminCookie } });
+    const list = (await listRes.json()) as { entries: { id: string; reason: string | null }[]; cooldownDays: number };
+    assert.equal(list.entries.length, 1);
+    assert.equal(list.cooldownDays, 90);
+
+    const bulkRes = await fetch(`${baseUrl}/api/invitations/bulk`, {
+      method: 'POST',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        templateId: edTemplate.id,
+        departmentId: edDept.id,
+        channel: 'sms',
+        rows: [{ phone: '0511111111' }, { phone: '0522222222' }]
+      })
+    });
+    const bulkBody = (await bulkRes.json()) as { created: number; skipped: number };
+    assert.equal(bulkBody.created, 1, 'only the non-DNC number should be invited');
+    assert.equal(bulkBody.skipped, 1);
+
+    await fetch(`${baseUrl}/api/settings/do-not-contact/${list.entries[0].id}`, { method: 'DELETE', headers: { cookie: adminCookie } });
+    const listAfterRemove = (await (await fetch(`${baseUrl}/api/settings/do-not-contact`, { headers: { cookie: adminCookie } })).json()) as {
+      entries: unknown[];
+    };
+    assert.equal(listAfterRemove.entries.length, 0);
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
+test('the same phone number is not re-invited within the 90-day cooldown window', async () => {
+  const { server, baseUrl, db } = await startServer();
+  try {
+    const adminCookie = await login(baseUrl, 'admin@tajruba.sa', 'Tajruba123!');
+    const departments = (await (await fetch(`${baseUrl}/api/departments`, { headers: { cookie: adminCookie } })).json()) as {
+      departments: { id: string; service_type: string }[];
+    };
+    const templates = (await (await fetch(`${baseUrl}/api/templates`, { headers: { cookie: adminCookie } })).json()) as {
+      templates: { id: string; service_type: string }[];
+    };
+    const edDept = departments.departments.find((d) => d.service_type === 'ED')!;
+    const edTemplate = templates.templates.find((t) => t.service_type === 'ED')!;
+
+    const firstInvite = await fetch(`${baseUrl}/api/invitations/bulk`, {
+      method: 'POST',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ templateId: edTemplate.id, departmentId: edDept.id, channel: 'sms', rows: [{ phone: '0533333333' }] })
+    });
+    assert.equal((await firstInvite.json() as { created: number }).created, 1);
+
+    const secondInvite = await fetch(`${baseUrl}/api/invitations/bulk`, {
+      method: 'POST',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ templateId: edTemplate.id, departmentId: edDept.id, channel: 'sms', rows: [{ phone: '0533333333' }] })
+    });
+    const secondBody = (await secondInvite.json()) as { created: number; skipped: number };
+    assert.equal(secondBody.created, 0, 'a second invitation to the same number within 90 days must be skipped');
+    assert.equal(secondBody.skipped, 1);
+  } finally {
+    server.close();
+    db.close();
+  }
+});

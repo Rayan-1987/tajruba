@@ -16,6 +16,8 @@ import {
 import { createDefaultAnalyzer, redactPii, shouldAlert } from './comments.ts';
 import {
   INSTRUMENTS,
+  PUBLIC_REPORTING_SAMPLE_THRESHOLD,
+  RELIABLE_SAMPLE_THRESHOLD,
   SMALL_SAMPLE_THRESHOLD,
   scoreDomain,
   scoreInstrument,
@@ -34,6 +36,10 @@ function uid(): string {
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 function logAudit(
@@ -89,6 +95,28 @@ function maskSecret(value: string | null): string | null {
   if (!value) return null;
   if (value.length <= 4) return '••••';
   return `••••${value.slice(-4)}`;
+}
+
+// Sampling frame rules: never invite a number on the tenant's Do-Not-Contact list, and never
+// invite the same patient twice within 90 days of their last invitation (avoids survey fatigue
+// and duplicate-response bias, matching common CAHPS-program sampling frame practice).
+const INVITATION_COOLDOWN_DAYS = 90;
+
+function isEligibleForInvitation(db: Db, tenantId: string, phoneHash: string): { eligible: boolean; reason?: 'dnc' | 'cooldown' } {
+  const onDncList = db
+    .prepare('SELECT 1 FROM do_not_contact_list WHERE tenant_id = ? AND phone_hash = ?')
+    .get(tenantId, phoneHash);
+  if (onDncList) return { eligible: false, reason: 'dnc' };
+
+  const cooldownStart = new Date(Date.now() - INVITATION_COOLDOWN_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const recentInvitation = db
+    .prepare(
+      'SELECT 1 FROM survey_invitations WHERE tenant_id = ? AND patient_phone_hash = ? AND created_at >= ? LIMIT 1'
+    )
+    .get(tenantId, phoneHash, cooldownStart);
+  if (recentInvitation) return { eligible: false, reason: 'cooldown' };
+
+  return { eligible: true };
 }
 
 function departmentScopeFilter(req: Request, tableAlias: string): { clause: string; params: (string | number)[] } {
@@ -396,8 +424,14 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     const expires = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
     let created = 0;
     let sent = 0;
+    let skipped = 0;
     for (const row of rows) {
       if (!row.phone) continue;
+      const phoneHash = sha256(row.phone);
+      if (!isEligibleForInvitation(db, tenantId, phoneHash).eligible) {
+        skipped += 1;
+        continue;
+      }
       const rawToken = uid();
       const surveyUrl = `${baseUrl}/s/${rawToken}`;
       const message = composeInvitationMessage(template.name_ar, template.name_en, surveyUrl, smsConfig.defaultLanguage);
@@ -410,7 +444,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         departmentId,
         template.service_type,
         sha256(rawToken),
-        sha256(row.phone),
+        phoneHash,
         effectiveChannel,
         result.ok ? 'sent' : 'pending',
         expires,
@@ -418,8 +452,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       );
       created += 1;
     }
-    logAudit(db, tenantId, null, 'invitations_webhook_created', 'survey_invitation', null, { count: created, sent });
-    res.status(201).json({ created, sent });
+    logAudit(db, tenantId, null, 'invitations_webhook_created', 'survey_invitation', null, { count: created, sent, skipped });
+    res.status(201).json({ created, sent, skipped });
   });
 
   // Everything below requires an authenticated session.
@@ -437,7 +471,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
 
   router.get('/question-bank', (req: Request, res: Response) => {
     const domains = db
-      .prepare('SELECT id, code, name_ar, name_en, service_type, benchmark_mean FROM question_domains WHERE tenant_id = ? AND active = 1')
+      .prepare('SELECT id, code, name_ar, name_en, service_type, benchmark_top_box_percent FROM question_domains WHERE tenant_id = ? AND active = 1')
       .all(req.user!.tenantId);
     const questions = db
       .prepare(
@@ -479,7 +513,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
 
     const domains = db
       .prepare(
-        `SELECT id, code, name_ar, name_en, service_type, benchmark_mean FROM question_domains
+        `SELECT id, code, name_ar, name_en, service_type, benchmark_top_box_percent FROM question_domains
          WHERE tenant_id = ? AND active = 1 AND (? IS NULL OR service_type = ?)`
       )
       .all(req.user!.tenantId, serviceType ?? null, serviceType ?? null) as {
@@ -488,7 +522,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       name_ar: string;
       name_en: string;
       service_type: string;
-      benchmark_mean: number;
+      benchmark_top_box_percent: number;
     }[];
 
     const results = domains.map((domain) => {
@@ -536,7 +570,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
           return values;
         });
 
-      const domainScore = scoreDomain(domain.id, allDomainValues, domain.benchmark_mean);
+      const domainScore = scoreDomain(domain.id, allDomainValues, domain.benchmark_top_box_percent);
       return {
         domain: { id: domain.id, code: domain.code, nameAr: domain.name_ar, nameEn: domain.name_en, serviceType: domain.service_type },
         score: domainScore,
@@ -544,16 +578,33 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       };
     });
 
-    res.json({ smallSampleThreshold: SMALL_SAMPLE_THRESHOLD, domains: results });
+    res.json({
+      smallSampleThreshold: SMALL_SAMPLE_THRESHOLD,
+      reliableSampleThreshold: RELIABLE_SAMPLE_THRESHOLD,
+      publicReportingSampleThreshold: PUBLIC_REPORTING_SAMPLE_THRESHOLD,
+      domains: results
+    });
   });
+
+  const TREND_PERIOD_EXPR: Record<'month' | 'quarter' | 'half' | 'year', string> = {
+    month: "strftime('%Y-%m', r.submitted_at)",
+    quarter: "strftime('%Y', r.submitted_at) || '-Q' || ((CAST(strftime('%m', r.submitted_at) AS INTEGER) - 1) / 3 + 1)",
+    half: "strftime('%Y', r.submitted_at) || '-H' || ((CAST(strftime('%m', r.submitted_at) AS INTEGER) - 1) / 6 + 1)",
+    year: "strftime('%Y', r.submitted_at)"
+  };
 
   router.get('/reports/trend', (req: Request, res: Response) => {
     const serviceType = req.query.serviceType as ServiceType | undefined;
     const departmentId = req.user!.role === 'DepartmentManager' ? req.user!.departmentId : (req.query.departmentId as string | undefined);
+    const periodParam = req.query.period as string | undefined;
+    const period = periodParam && periodParam in TREND_PERIOD_EXPR ? (periodParam as keyof typeof TREND_PERIOD_EXPR) : 'month';
+    const periodExpr = TREND_PERIOD_EXPR[period];
 
     const rows = db
       .prepare(
-        `SELECT strftime('%Y-%m', r.submitted_at) as month, AVG(a.value_numeric) as mean, COUNT(*) as n
+        `SELECT ${periodExpr} as period, AVG(a.value_numeric) as mean,
+                AVG(CASE WHEN a.value_numeric >= 5 THEN 100.0 ELSE 0.0 END) as topBoxPercent,
+                COUNT(*) as n
          FROM answers a
          JOIN survey_responses r ON r.id = a.response_id
          JOIN questions q ON q.id = a.question_id
@@ -561,13 +612,16 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
          WHERE r.tenant_id = ? AND q.answer_type = 'likert5'
          ${serviceType ? 'AND q.service_type = ?' : ''}
          ${departmentId ? 'AND si.department_id = ?' : ''}
-         GROUP BY month ORDER BY month`
+         GROUP BY period ORDER BY period`
       )
       .all(
         ...[req.user!.tenantId, ...(serviceType ? [serviceType] : []), ...(departmentId ? [departmentId] : [])]
-      ) as { month: string; mean: number; n: number }[];
+      ) as { period: string; mean: number; topBoxPercent: number; n: number }[];
 
-    res.json({ trend: rows });
+    res.json({
+      period,
+      trend: rows.map((r) => ({ ...r, mean: round2(r.mean), topBoxPercent: round2(r.topBoxPercent) }))
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -711,8 +765,14 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       const expires = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
       let created = 0;
       let sent = 0;
+      let skipped = 0;
       for (const row of rows) {
         if (!row.phone) continue;
+        const phoneHash = sha256(row.phone);
+        if (!isEligibleForInvitation(db, req.user!.tenantId, phoneHash).eligible) {
+          skipped += 1;
+          continue;
+        }
         const rawToken = uid();
         let status = 'pending';
         if (effectiveChannel === 'sms' || effectiveChannel === 'whatsapp') {
@@ -729,7 +789,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
           departmentId,
           template.service_type,
           sha256(rawToken),
-          sha256(row.phone),
+          phoneHash,
           effectiveChannel,
           status,
           expires,
@@ -740,9 +800,10 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       logAudit(db, req.user!.tenantId, req.user!.id, 'invitations_bulk_created', 'survey_invitation', null, {
         count: created,
         sent,
+        skipped,
         smsProvider: provider.name
       });
-      res.status(201).json({ created, sent, smsProvider: provider.name });
+      res.status(201).json({ created, sent, skipped, smsProvider: provider.name });
     }
   );
 
@@ -1054,6 +1115,41 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     );
     logAudit(db, req.user!.tenantId, req.user!.id, 'webhook_key_regenerated', 'tenant_integrations', null, null);
     res.json({ key: rawKey });
+  });
+
+  // -------------------------------------------------------------------------
+  // Do-Not-Contact list (sampling frame)
+  // -------------------------------------------------------------------------
+  router.get('/settings/do-not-contact', requireRole('SystemAdmin', 'QualityManager'), (req: Request, res: Response) => {
+    const rows = db
+      .prepare('SELECT id, reason, created_at FROM do_not_contact_list WHERE tenant_id = ? ORDER BY created_at DESC')
+      .all(req.user!.tenantId);
+    res.json({ entries: rows, cooldownDays: INVITATION_COOLDOWN_DAYS });
+  });
+
+  router.post(
+    '/settings/do-not-contact',
+    requireRole('SystemAdmin', 'QualityManager'),
+    express.json({ limit: '16kb' }),
+    (req: Request, res: Response) => {
+      const { phone, reason } = req.body as { phone?: string; reason?: string };
+      if (!phone) {
+        res.status(400).json({ error: 'phone_required' });
+        return;
+      }
+      const phoneHash = sha256(phone);
+      db.prepare(
+        'INSERT OR IGNORE INTO do_not_contact_list (id, tenant_id, phone_hash, reason, created_by) VALUES (?, ?, ?, ?, ?)'
+      ).run(uid(), req.user!.tenantId, phoneHash, reason ?? null, req.user!.id);
+      logAudit(db, req.user!.tenantId, req.user!.id, 'dnc_entry_added', 'do_not_contact_list', null, { reason });
+      res.status(201).json({ ok: true });
+    }
+  );
+
+  router.delete('/settings/do-not-contact/:id', requireRole('SystemAdmin', 'QualityManager'), (req: Request, res: Response) => {
+    db.prepare('DELETE FROM do_not_contact_list WHERE id = ? AND tenant_id = ?').run(req.params.id, req.user!.tenantId);
+    logAudit(db, req.user!.tenantId, req.user!.id, 'dnc_entry_removed', 'do_not_contact_list', req.params.id, null);
+    res.json({ ok: true });
   });
 
   // -------------------------------------------------------------------------

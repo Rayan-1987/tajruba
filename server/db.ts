@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS question_domains (
   name_ar TEXT NOT NULL,
   name_en TEXT NOT NULL,
   service_type TEXT NOT NULL,
-  benchmark_mean REAL NOT NULL DEFAULT 4.0,
+  benchmark_top_box_percent REAL NOT NULL DEFAULT 75.0,
   active INTEGER NOT NULL DEFAULT 1,
   UNIQUE(tenant_id, code)
 );
@@ -133,6 +133,19 @@ CREATE TABLE IF NOT EXISTS survey_invitations (
 );
 CREATE INDEX IF NOT EXISTS idx_invitations_tenant ON survey_invitations(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_invitations_token ON survey_invitations(token_hash);
+
+-- Sampling frame: patients who must never be invited again (opt-out / complaint / deceased),
+-- keyed by the same irreversible phone hash used on survey_invitations (never raw phone numbers).
+CREATE TABLE IF NOT EXISTS do_not_contact_list (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  phone_hash TEXT NOT NULL,
+  reason TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(tenant_id, phone_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_dnc_tenant ON do_not_contact_list(tenant_id);
 
 CREATE TABLE IF NOT EXISTS survey_responses (
   id TEXT PRIMARY KEY,

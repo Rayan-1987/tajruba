@@ -139,7 +139,7 @@ export function provisionTenantDefaults(db: Db, root: string, tenantId: string):
   );
 
   const insertDomain = db.prepare(
-    'INSERT INTO question_domains (id, tenant_id, code, name_ar, name_en, service_type, benchmark_mean) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO question_domains (id, tenant_id, code, name_ar, name_en, service_type, benchmark_top_box_percent) VALUES (?, ?, ?, ?, ?, ?, ?)'
   );
   const insertQuestion = db.prepare(
     `INSERT INTO questions
@@ -215,7 +215,7 @@ export function provisionTenantDefaults(db: Db, root: string, tenantId: string):
       const domainCode = `${service}_${ancillary.code}`;
       const domainId = uid();
       domainIds[domainCode] = domainId;
-      insertDomain.run(domainId, tenantId, domainCode, ancillary.nameAr, ancillary.nameEn, service, 4.0);
+      insertDomain.run(domainId, tenantId, domainCode, ancillary.nameAr, ancillary.nameEn, service, 70.0);
 
       const gateCode = `${service}-${ancillary.code}-GATE`;
       const gateId = uid();

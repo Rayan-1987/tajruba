@@ -4,6 +4,22 @@ import { api } from '../api';
 import { useAuth } from '../AuthContext';
 import { SERVICE_LABELS_AR, type Department, type ServiceType } from '../types';
 
+type ConfidenceTier = 'insufficient' | 'directional' | 'reliable' | 'public_reporting';
+
+const CONFIDENCE_BADGE: Record<ConfidenceTier, { label: string; className: string }> = {
+  insufficient: { label: 'عينة غير كافية', className: 'bg-red-100 text-red-700' },
+  directional: { label: 'استرشادية', className: 'bg-amber-100 text-amber-700' },
+  reliable: { label: 'موثوقة', className: 'bg-blue-100 text-blue-700' },
+  public_reporting: { label: 'جاهزة للنشر', className: 'bg-emerald-100 text-emerald-700' }
+};
+
+const PERIOD_OPTIONS: { value: 'month' | 'quarter' | 'half' | 'year'; label: string }[] = [
+  { value: 'month', label: 'شهري' },
+  { value: 'quarter', label: 'ربع سنوي' },
+  { value: 'half', label: 'نصف سنوي' },
+  { value: 'year', label: 'سنوي' }
+];
+
 interface QuestionScore {
   id: string;
   code: string;
@@ -18,7 +34,15 @@ interface QuestionScore {
 
 interface DomainReport {
   domain: { id: string; code: string; nameAr: string; nameEn: string; serviceType: ServiceType };
-  score: { n: number; mean: number | null; benchmark: number | null; diff: number | null; smallSample: boolean };
+  score: {
+    n: number;
+    mean: number | null;
+    topBoxPercent: number | null;
+    benchmarkTopBoxPercent: number | null;
+    diffPercentPoints: number | null;
+    confidenceTier: ConfidenceTier;
+    smallSample: boolean;
+  };
   questions: QuestionScore[];
 }
 
@@ -28,8 +52,8 @@ export default function Reports() {
   const [serviceType, setServiceType] = useState<ServiceType | ''>('');
   const [departmentId, setDepartmentId] = useState<string>(user?.departmentId ?? '');
   const [domains, setDomains] = useState<DomainReport[]>([]);
-  const [smallSampleThreshold, setSmallSampleThreshold] = useState(30);
-  const [trend, setTrend] = useState<{ month: string; mean: number; n: number }[]>([]);
+  const [period, setPeriod] = useState<'month' | 'quarter' | 'half' | 'year'>('month');
+  const [trend, setTrend] = useState<{ period: string; mean: number; topBoxPercent: number; n: number }[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
 
   useEffect(() => {
@@ -37,15 +61,19 @@ export default function Reports() {
   }, []);
 
   useEffect(() => {
-    const params = new URLSearchParams();
-    if (serviceType) params.set('serviceType', serviceType);
-    if (departmentId) params.set('departmentId', departmentId);
-    api.get<{ smallSampleThreshold: number; domains: DomainReport[] }>(`/reports/scores?${params}`).then((res) => {
+    const scoreParams = new URLSearchParams();
+    if (serviceType) scoreParams.set('serviceType', serviceType);
+    if (departmentId) scoreParams.set('departmentId', departmentId);
+    api.get<{ domains: DomainReport[] }>(`/reports/scores?${scoreParams}`).then((res) => {
       setDomains(res.domains);
-      setSmallSampleThreshold(res.smallSampleThreshold);
     });
-    api.get<{ trend: { month: string; mean: number; n: number }[] }>(`/reports/trend?${params}`).then((res) => setTrend(res.trend));
-  }, [serviceType, departmentId]);
+
+    const trendParams = new URLSearchParams(scoreParams);
+    trendParams.set('period', period);
+    api
+      .get<{ trend: { period: string; mean: number; topBoxPercent: number; n: number }[] }>(`/reports/trend?${trendParams}`)
+      .then((res) => setTrend(res.trend));
+  }, [serviceType, departmentId, period]);
 
   const isDeptLocked = user?.role === 'DepartmentManager';
 
@@ -86,25 +114,43 @@ export default function Reports() {
         </select>
       </div>
 
-      {trend.length > 0 && (
-        <div className="rounded-2xl bg-white p-4 shadow-sm">
-          <h3 className="mb-2 text-sm font-semibold text-slate-700">اتجاه المتوسط الشهري</h3>
+      <div className="rounded-2xl bg-white p-4 shadow-sm">
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-slate-700">اتجاه نسبة Top Box</h3>
+          <div className="flex gap-1">
+            {PERIOD_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setPeriod(opt.value)}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                  period === opt.value ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {trend.length > 0 ? (
           <ResponsiveContainer width="100%" height={220}>
             <LineChart data={trend}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-              <YAxis domain={[1, 5]} tick={{ fontSize: 12 }} />
+              <XAxis dataKey="period" tick={{ fontSize: 12 }} />
+              <YAxis domain={[0, 100]} tick={{ fontSize: 12 }} />
               <Tooltip />
-              <Line type="monotone" dataKey="mean" stroke="#059669" strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="topBoxPercent" name="Top Box %" stroke="#059669" strokeWidth={2} dot={{ r: 3 }} />
             </LineChart>
           </ResponsiveContainer>
-        </div>
-      )}
+        ) : (
+          <p className="py-6 text-center text-sm text-slate-400">لا توجد بيانات كافية لهذه الفترة</p>
+        )}
+      </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {filteredDomains.map((d) => {
-          const diff = d.score.diff;
+          const diff = d.score.diffPercentPoints;
           const diffColor = diff == null ? 'text-slate-400' : diff >= 0 ? 'text-emerald-600' : 'text-red-600';
+          const badge = CONFIDENCE_BADGE[d.score.confidenceTier];
           return (
             <button
               key={d.domain.id}
@@ -113,20 +159,20 @@ export default function Reports() {
             >
               <div className="mb-1 flex items-center justify-between">
                 <span className="text-xs font-medium text-slate-400">{SERVICE_LABELS_AR[d.domain.serviceType]}</span>
-                {d.score.smallSample && (
-                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
-                    عينة صغيرة (n&lt;{smallSampleThreshold})
-                  </span>
-                )}
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${badge.className}`}>{badge.label}</span>
               </div>
               <h4 className="mb-2 font-semibold text-slate-800">{d.domain.nameAr}</h4>
               <div className="flex items-end justify-between">
-                <span className="text-2xl font-bold text-slate-800">{d.score.mean?.toFixed(2) ?? '-'}</span>
+                <span className="text-2xl font-bold text-slate-800">
+                  {d.score.topBoxPercent != null ? `${d.score.topBoxPercent.toFixed(0)}%` : '-'}
+                </span>
                 <span className={`text-sm font-semibold ${diffColor}`}>
-                  {diff != null ? `${diff >= 0 ? '+' : ''}${diff.toFixed(2)} عن المعيار` : ''}
+                  {diff != null ? `${diff >= 0 ? '+' : ''}${diff.toFixed(1)} نقطة عن المعيار` : ''}
                 </span>
               </div>
-              <p className="mt-1 text-xs text-slate-400">n = {d.score.n}</p>
+              <p className="mt-1 text-xs text-slate-400">
+                متوسط {d.score.mean?.toFixed(2) ?? '-'} من 5 · n = {d.score.n}
+              </p>
 
               {expanded === d.domain.id && (
                 <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">

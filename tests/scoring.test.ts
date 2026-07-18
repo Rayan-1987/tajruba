@@ -32,21 +32,32 @@ test('scoreNps computes promoters minus detractors', () => {
 });
 
 test('scoreDomain flags small samples under the threshold', () => {
-  const small = scoreDomain('d1', [4, 5, 3], 4.0);
+  const small = scoreDomain('d1', [4, 5, 3], 75.0);
   assert.equal(small.smallSample, true);
+  assert.equal(small.confidenceTier, 'insufficient');
   const large = scoreDomain(
     'd1',
     Array.from({ length: 31 }, () => 4),
-    4.0
+    75.0
   );
   assert.equal(large.smallSample, false);
-  assert.equal(large.diff, 0);
+  assert.equal(large.confidenceTier, 'directional');
+  assert.equal(large.topBoxPercent, 0);
+  assert.equal(large.diffPercentPoints, -75);
 });
 
-test('scoreDomain computes benchmark diff', () => {
-  const result = scoreDomain('d1', [3, 3, 3, 3], 4.0);
-  assert.equal(result.mean, 3);
-  assert.equal(result.diff, -1);
+test('scoreDomain computes top-box percentage and benchmark diff', () => {
+  const result = scoreDomain('d1', [5, 5, 5, 3], 75.0);
+  assert.equal(result.mean, 4.5);
+  assert.equal(result.topBoxPercent, 75);
+  assert.equal(result.diffPercentPoints, 0);
+});
+
+test('scoreDomain reports sample confidence tiers matching HCAHPS thresholds', () => {
+  assert.equal(scoreDomain('d1', Array.from({ length: 29 }, () => 5), 75).confidenceTier, 'insufficient');
+  assert.equal(scoreDomain('d1', Array.from({ length: 99 }, () => 5), 75).confidenceTier, 'directional');
+  assert.equal(scoreDomain('d1', Array.from({ length: 299 }, () => 5), 75).confidenceTier, 'reliable');
+  assert.equal(scoreDomain('d1', Array.from({ length: 300 }, () => 5), 75).confidenceTier, 'public_reporting');
 });
 
 test('computeInstrumentRaw applies reverse scoring', () => {

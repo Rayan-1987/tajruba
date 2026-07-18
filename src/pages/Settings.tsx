@@ -11,6 +11,12 @@ interface IntegrationsSettings {
   hisWebhookUrl: string;
 }
 
+interface DncEntry {
+  id: string;
+  reason: string | null;
+  created_at: string;
+}
+
 export default function Settings() {
   const [settings, setSettings] = useState<IntegrationsSettings | null>(null);
   const [smsProvider, setSmsProvider] = useState('console');
@@ -23,6 +29,11 @@ export default function Settings() {
   const [newWebhookKey, setNewWebhookKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const [dncEntries, setDncEntries] = useState<DncEntry[]>([]);
+  const [cooldownDays, setCooldownDays] = useState(90);
+  const [dncPhone, setDncPhone] = useState('');
+  const [dncReason, setDncReason] = useState('');
+
   const load = () => {
     api.get<IntegrationsSettings>('/settings/integrations').then((res) => {
       setSettings(res);
@@ -32,6 +43,27 @@ export default function Settings() {
     });
   };
   useEffect(load, []);
+
+  const loadDnc = () => {
+    api.get<{ entries: DncEntry[]; cooldownDays: number }>('/settings/do-not-contact').then((res) => {
+      setDncEntries(res.entries);
+      setCooldownDays(res.cooldownDays);
+    });
+  };
+  useEffect(loadDnc, []);
+
+  const addDncEntry = async () => {
+    if (!dncPhone) return;
+    await api.post('/settings/do-not-contact', { phone: dncPhone, reason: dncReason || undefined });
+    setDncPhone('');
+    setDncReason('');
+    loadDnc();
+  };
+
+  const removeDncEntry = async (id: string) => {
+    await api.delete(`/settings/do-not-contact/${id}`);
+    loadDnc();
+  };
 
   const save = async () => {
     setBusy(true);
@@ -177,6 +209,49 @@ export default function Settings() {
             <p className="mb-1 font-semibold">انسخ هذا المفتاح الآن — لن يظهر مرة أخرى:</p>
             <code className="break-all">{newWebhookKey}</code>
           </div>
+        )}
+      </div>
+
+      <div className="rounded-2xl bg-white p-4 shadow-sm">
+        <h3 className="mb-1 text-sm font-semibold text-slate-700">قائمة عدم التواصل (Do Not Contact)</h3>
+        <p className="mb-3 text-xs text-slate-500">
+          أي رقم في هذه القائمة لن يتم دعوته لأي استبيان مطلقًا. كما لا تتم دعوة نفس الرقم مرتين خلال {cooldownDays} يومًا
+          تلقائيًا لتفادي إرهاق المريض بالاستبيانات المتكررة.
+        </p>
+        <div className="mb-3 flex flex-wrap gap-2">
+          <input
+            value={dncPhone}
+            onChange={(e) => setDncPhone(e.target.value)}
+            className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            placeholder="رقم الجوال"
+          />
+          <input
+            value={dncReason}
+            onChange={(e) => setDncReason(e.target.value)}
+            className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            placeholder="السبب (اختياري)"
+          />
+          <button
+            type="button"
+            onClick={addDncEntry}
+            className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-900"
+          >
+            إضافة
+          </button>
+        </div>
+        {dncEntries.length === 0 ? (
+          <p className="text-xs text-slate-400">لا توجد أرقام في القائمة حاليًا.</p>
+        ) : (
+          <ul className="divide-y divide-slate-100 text-sm">
+            {dncEntries.map((entry) => (
+              <li key={entry.id} className="flex items-center justify-between py-2">
+                <span className="text-slate-600">{entry.reason || 'بدون سبب مذكور'}</span>
+                <button type="button" onClick={() => removeDncEntry(entry.id)} className="text-xs font-semibold text-red-600 hover:underline">
+                  إزالة
+                </button>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
     </div>

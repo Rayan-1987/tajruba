@@ -8,17 +8,36 @@ export interface QuestionScore {
   topBoxPercent: number | null;
 }
 
+export type SampleConfidenceTier = 'insufficient' | 'directional' | 'reliable' | 'public_reporting';
+
 export interface DomainScore {
   domainId: string;
   n: number;
   mean: number | null;
-  benchmark: number | null;
-  diff: number | null;
+  topBoxPercent: number | null;
+  /** Benchmark expressed as a Top-Box percentage (HCAHPS convention), not a 1-5 mean. */
+  benchmarkTopBoxPercent: number | null;
+  /** topBoxPercent - benchmarkTopBoxPercent, in percentage points. */
+  diffPercentPoints: number | null;
+  confidenceTier: SampleConfidenceTier;
+  /** @deprecated kept for backward compatibility with the n<30 badge; prefer confidenceTier. */
   smallSample: boolean;
 }
 
+// Sample-size confidence tiers, matching HCAHPS/CAHPS practice: n<30 has no statistical
+// footing even for a directional read; 30-99 is directional only; 100-299 is reliable for
+// internal comparison; 300+ (over 4 rolling quarters) is CMS's threshold for public reporting.
 export const SMALL_SAMPLE_THRESHOLD = 30;
+export const RELIABLE_SAMPLE_THRESHOLD = 100;
+export const PUBLIC_REPORTING_SAMPLE_THRESHOLD = 300;
 const LIKERT_TOP_BOX_VALUE = 5;
+
+export function sampleConfidenceTier(n: number): SampleConfidenceTier {
+  if (n < SMALL_SAMPLE_THRESHOLD) return 'insufficient';
+  if (n < RELIABLE_SAMPLE_THRESHOLD) return 'directional';
+  if (n < PUBLIC_REPORTING_SAMPLE_THRESHOLD) return 'reliable';
+  return 'public_reporting';
+}
 
 /** Mean + top-box (% answering the maximum Likert value) for one question's raw values. */
 export function scoreQuestion(questionId: string, values: number[]): QuestionScore {
@@ -51,16 +70,41 @@ export function scoreYesNo(values: number[]): { n: number; yesPercent: number | 
 }
 
 /**
- * Domain score = mean over all raw answer values belonging to questions in the domain
- * (flattened, not a mean-of-means), so questions with more responses aren't under-weighted.
+ * Domain score = mean + top-box percentage over all raw answer values belonging to questions
+ * in the domain (flattened, not a mean-of-means), so questions with more responses aren't
+ * under-weighted. Primary reported metric is topBoxPercent (HCAHPS convention: % of
+ * respondents giving the maximum Likert rating), not the raw mean.
  */
-export function scoreDomain(domainId: string, allValues: number[], benchmark: number | null): DomainScore {
+export function scoreDomain(domainId: string, allValues: number[], benchmarkTopBoxPercent: number | null): DomainScore {
   const clean = allValues.filter((v) => Number.isFinite(v));
   const n = clean.length;
-  if (n === 0) return { domainId, n: 0, mean: null, benchmark, diff: null, smallSample: true };
+  const confidenceTier = sampleConfidenceTier(n);
+  if (n === 0) {
+    return {
+      domainId,
+      n: 0,
+      mean: null,
+      topBoxPercent: null,
+      benchmarkTopBoxPercent,
+      diffPercentPoints: null,
+      confidenceTier,
+      smallSample: true
+    };
+  }
   const mean = round2(clean.reduce((sum, v) => sum + v, 0) / n);
-  const diff = benchmark != null ? round2(mean - benchmark) : null;
-  return { domainId, n, mean, benchmark, diff, smallSample: n < SMALL_SAMPLE_THRESHOLD };
+  const topBoxCount = clean.filter((v) => v >= LIKERT_TOP_BOX_VALUE).length;
+  const topBoxPercent = round2((topBoxCount / n) * 100);
+  const diffPercentPoints = benchmarkTopBoxPercent != null ? round2(topBoxPercent - benchmarkTopBoxPercent) : null;
+  return {
+    domainId,
+    n,
+    mean,
+    topBoxPercent,
+    benchmarkTopBoxPercent,
+    diffPercentPoints,
+    confidenceTier,
+    smallSample: n < SMALL_SAMPLE_THRESHOLD
+  };
 }
 
 function round2(value: number): number {

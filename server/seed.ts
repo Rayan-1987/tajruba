@@ -54,11 +54,19 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function sampleAnswer(rng: () => number, type: AnswerType, benchmark: number): number {
+// Domain benchmarks are stored as a 0-100 top-box percentage (HCAHPS convention). Demo data
+// generation still needs a 1-5 Likert target to sample around, so approximate the equivalent
+// mean from the percentage (e.g. 68% top-box -> ~3.7 mean, 84% top-box -> ~4.4 mean).
+function benchmarkPercentToMean(percent: number): number {
+  return clamp(1 + (percent / 100) * 4, 1, 5);
+}
+
+function sampleAnswer(rng: () => number, type: AnswerType, benchmarkPercent: number): number {
+  const mean = benchmarkPercentToMean(benchmarkPercent);
   if (type === 'nps') {
-    return Math.round(clamp(benchmark * 2 + (rng() - 0.5) * 6, 0, 10));
+    return Math.round(clamp(mean * 2 + (rng() - 0.5) * 6, 0, 10));
   }
-  return Math.round(clamp(benchmark + (rng() - 0.5) * 2.6, 1, 5));
+  return Math.round(clamp(mean + (rng() - 0.5) * 2.6, 1, 5));
 }
 
 function daysAgo(n: number): string {
