@@ -270,6 +270,7 @@ CREATE TABLE IF NOT EXISTS proms_instrument_items (
   text_ar TEXT NOT NULL,
   text_en TEXT NOT NULL,
   reverse_scored INTEGER NOT NULL DEFAULT 0,
+  scale_max INTEGER NOT NULL DEFAULT 1,
   sort_order INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_instrument_items ON proms_instrument_items(instrument_id);
@@ -295,12 +296,18 @@ CREATE TABLE IF NOT EXISTS pathway_timepoints (
 );
 CREATE INDEX IF NOT EXISTS idx_timepoints_pathway ON pathway_timepoints(pathway_id);
 
+-- Unlike anonymous PREMs surveys, a PROMs episode is a formal, consented clinical follow-up
+-- program (e.g. a 12-month knee-replacement pathway) where the hospital already has an
+-- ongoing relationship with the patient — so, unlike survey_invitations.patient_phone_hash,
+-- contact_phone is stored in the clear here to allow contacting the same patient repeatedly
+-- across every timepoint in the pathway.
 CREATE TABLE IF NOT EXISTS patient_episodes (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   pathway_id TEXT NOT NULL REFERENCES care_pathways(id) ON DELETE CASCADE,
   department_id TEXT NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
   patient_ref_hash TEXT NOT NULL,
+  contact_phone TEXT,
   surgeon_ref TEXT,
   start_date TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active'
@@ -313,9 +320,12 @@ CREATE TABLE IF NOT EXISTS prom_assignments (
   timepoint_id TEXT NOT NULL REFERENCES pathway_timepoints(id) ON DELETE CASCADE,
   instrument_id TEXT NOT NULL REFERENCES proms_instruments(id) ON DELETE CASCADE,
   due_date TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'scheduled'
+  status TEXT NOT NULL DEFAULT 'scheduled',
+  token_hash TEXT UNIQUE,
+  sent_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_assignments_episode ON prom_assignments(episode_id);
+CREATE INDEX IF NOT EXISTS idx_assignments_token ON prom_assignments(token_hash);
 
 CREATE TABLE IF NOT EXISTS prom_scores (
   id TEXT PRIMARY KEY,

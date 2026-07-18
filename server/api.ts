@@ -27,7 +27,7 @@ import {
   type InstrumentItemValue
 } from './scoring.ts';
 import { DEFAULT_DEPARTMENTS, provisionTenantDefaults } from './provisioning.ts';
-import { composeInvitationMessage, composeResolutionMessage, createSmsProvider, type TenantSmsConfig } from './sms.ts';
+import { composeInvitationMessage, composePromsMessage, composeResolutionMessage, createSmsProvider, type TenantSmsConfig } from './sms.ts';
 import type { AnswerType, RecoveryStatus, Role, ServiceType } from './types.ts';
 
 function uid(): string {
@@ -108,10 +108,14 @@ function isEligibleForInvitation(db: Db, tenantId: string, phoneHash: string): {
     .get(tenantId, phoneHash);
   if (onDncList) return { eligible: false, reason: 'dnc' };
 
+  // Compared via SQLite's datetime() on both sides: created_at is stored in SQLite's own
+  // 'YYYY-MM-DD HH:MM:SS' format while cooldownStart is a JS ISO string ('...THH:MM:SS.sssZ') —
+  // a raw text comparison ties (and breaks the wrong way) whenever the two dates fall on the
+  // same calendar day, so both must be normalized through datetime() before comparing.
   const cooldownStart = new Date(Date.now() - INVITATION_COOLDOWN_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const recentInvitation = db
     .prepare(
-      'SELECT 1 FROM survey_invitations WHERE tenant_id = ? AND patient_phone_hash = ? AND created_at >= ? LIMIT 1'
+      'SELECT 1 FROM survey_invitations WHERE tenant_id = ? AND patient_phone_hash = ? AND datetime(created_at) >= datetime(?) LIMIT 1'
     )
     .get(tenantId, phoneHash, cooldownStart);
   if (recentInvitation) return { eligible: false, reason: 'cooldown' };
@@ -577,7 +581,184 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     res.status(201).json({ created, sent, skipped });
   });
 
+  // Same HIS integration key as /webhooks/invitations — lets the hospital's own system start
+  // a PROMs care-pathway episode automatically (e.g. when a knee-replacement surgery is
+  // documented), instead of a staff member re-keying it into the dashboard.
+  router.post('/webhooks/episodes', express.json({ limit: '8kb' }), (req: Request, res: Response) => {
+    const apiKey = req.get('X-Api-Key');
+    if (!apiKey) {
+      res.status(401).json({ error: 'missing_api_key' });
+      return;
+    }
+    const integration = db
+      .prepare('SELECT tenant_id FROM tenant_integrations WHERE his_webhook_key_hash = ? AND his_webhook_enabled = 1')
+      .get(sha256(apiKey)) as { tenant_id: string } | undefined;
+    if (!integration) {
+      res.status(401).json({ error: 'invalid_api_key' });
+      return;
+    }
+    const result = createEpisode(db, integration.tenant_id, req.body);
+    if (!result.ok) {
+      res.status(result.error.endsWith('not_found') ? 404 : 400).json({ error: result.error });
+      return;
+    }
+    logAudit(db, integration.tenant_id, null, 'episode_created_via_webhook', 'patient_episode', result.id, null);
+    res.status(201).json({ id: result.id });
+  });
+
   // Everything below requires an authenticated session.
+  // -------------------------------------------------------------------------
+  // PROMs — public patient-facing form (free instruments only; licensed
+  // instruments are never administered digitally until licensing is documented)
+  // -------------------------------------------------------------------------
+  router.get('/public/proms/:token', (req: Request, res: Response) => {
+    const assignment = db
+      .prepare(
+        `SELECT pa.id, pa.status, pa.instrument_id, pi.code as instrument_code, pi.name_ar as instrument_name_ar,
+                pi.name_en as instrument_name_en, pi.license_status
+         FROM prom_assignments pa JOIN proms_instruments pi ON pi.id = pa.instrument_id
+         WHERE pa.token_hash = ?`
+      )
+      .get(sha256(req.params.token)) as
+      | {
+          id: string;
+          status: string;
+          instrument_id: string;
+          instrument_code: string;
+          instrument_name_ar: string;
+          instrument_name_en: string;
+          license_status: string;
+        }
+      | undefined;
+    if (!assignment) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    if (assignment.license_status !== 'free') {
+      res.status(409).json({ error: 'instrument_requires_manual_administration' });
+      return;
+    }
+    if (assignment.status === 'completed') {
+      res.status(410).json({ error: 'already_completed' });
+      return;
+    }
+    const items = db
+      .prepare('SELECT code, text_ar, text_en, scale_max FROM proms_instrument_items WHERE instrument_id = ? ORDER BY sort_order')
+      .all(assignment.instrument_id) as { code: string; text_ar: string; text_en: string; scale_max: number }[];
+    res.json({
+      instrumentName: assignment.instrument_name_ar,
+      instrumentNameEn: assignment.instrument_name_en,
+      items: items.map((i) => ({ code: i.code, textAr: i.text_ar, textEn: i.text_en, scaleMax: i.scale_max }))
+    });
+  });
+
+  router.post('/public/proms/:token/submit', express.json({ limit: '16kb' }), (req: Request, res: Response) => {
+    const assignment = db
+      .prepare(
+        `SELECT pa.id, pa.episode_id, pa.timepoint_id, pa.instrument_id, pa.status, pi.code as instrument_code, pi.license_status,
+                pe.tenant_id
+         FROM prom_assignments pa
+         JOIN proms_instruments pi ON pi.id = pa.instrument_id
+         JOIN patient_episodes pe ON pe.id = pa.episode_id
+         WHERE pa.token_hash = ?`
+      )
+      .get(sha256(req.params.token)) as
+      | {
+          id: string;
+          episode_id: string;
+          timepoint_id: string;
+          instrument_id: string;
+          status: string;
+          instrument_code: string;
+          license_status: string;
+          tenant_id: string;
+        }
+      | undefined;
+    if (!assignment) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    if (assignment.license_status !== 'free') {
+      res.status(409).json({ error: 'instrument_requires_manual_administration' });
+      return;
+    }
+    if (assignment.status === 'completed') {
+      res.status(410).json({ error: 'already_completed' });
+      return;
+    }
+
+    const definition = INSTRUMENTS[assignment.instrument_code];
+    if (!definition) {
+      res.status(500).json({ error: 'instrument_not_scorable' });
+      return;
+    }
+
+    const body = req.body as { answers?: { code: string; value: number }[] };
+    if (!Array.isArray(body.answers)) {
+      res.status(400).json({ error: 'invalid_answers' });
+      return;
+    }
+    const itemDefs = db
+      .prepare('SELECT code, reverse_scored, scale_max FROM proms_instrument_items WHERE instrument_id = ?')
+      .all(assignment.instrument_id) as { code: string; reverse_scored: number; scale_max: number }[];
+    const itemDefByCode = new Map(itemDefs.map((i) => [i.code, i]));
+
+    const items: InstrumentItemValue[] = [];
+    for (const answer of body.answers) {
+      const def = itemDefByCode.get(answer.code);
+      if (!def || typeof answer.value !== 'number' || !Number.isFinite(answer.value)) continue;
+      items.push({ code: answer.code, value: answer.value, reverseScored: !!def.reverse_scored, scaleMax: def.scale_max });
+    }
+    if (items.length < definition.minItems) {
+      res.status(400).json({ error: 'incomplete_answers' });
+      return;
+    }
+
+    // Baseline = the score recorded at this episode's earliest timepoint for the same
+    // instrument (null if this submission IS the baseline).
+    const baselineRow = db
+      .prepare(
+        `SELECT ps.raw_score
+         FROM prom_scores ps
+         JOIN prom_assignments pa2 ON pa2.id = ps.assignment_id
+         JOIN pathway_timepoints pt ON pt.id = pa2.timepoint_id
+         WHERE pa2.episode_id = ? AND pa2.instrument_id = ?
+         ORDER BY pt.sort_order ASC LIMIT 1`
+      )
+      .get(assignment.episode_id, assignment.instrument_id) as { raw_score: number } | undefined;
+
+    const currentTimepointSort = (
+      db.prepare('SELECT sort_order FROM pathway_timepoints WHERE id = ?').get(assignment.timepoint_id) as { sort_order: number }
+    ).sort_order;
+    const earliestSort = (
+      db
+        .prepare(
+          `SELECT MIN(pt.sort_order) as s FROM prom_assignments pa2 JOIN pathway_timepoints pt ON pt.id = pa2.timepoint_id
+           WHERE pa2.episode_id = ? AND pa2.instrument_id = ?`
+        )
+        .get(assignment.episode_id, assignment.instrument_id) as { s: number }
+    ).s;
+    const isBaseline = currentTimepointSort === earliestSort;
+
+    const result = scoreInstrument(definition, items, isBaseline ? null : (baselineRow?.raw_score ?? null));
+
+    db.prepare(
+      'INSERT INTO prom_scores (id, assignment_id, instrument_id, raw_score, band, baseline_score, delta, mcid_met) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      uid(),
+      assignment.id,
+      assignment.instrument_id,
+      result.raw,
+      result.band,
+      result.baseline,
+      result.delta,
+      result.mcidMet === null ? null : result.mcidMet ? 1 : 0
+    );
+    db.prepare("UPDATE prom_assignments SET status = 'completed' WHERE id = ?").run(assignment.id);
+
+    res.status(201).json({ ok: true, raw: result.raw, band: result.band, delta: result.delta, mcidMet: result.mcidMet });
+  });
+
   router.use(requireAuth);
 
   // -------------------------------------------------------------------------
@@ -1501,47 +1682,147 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     res.json({ episodes: episodeResults, mcidSummary });
   });
 
+  function createEpisode(
+    db: Db,
+    tenantId: string,
+    body: { pathwayId?: string; departmentId?: string; patientRef?: string; contactPhone?: string; surgeonRef?: string; startDate?: string }
+  ): { ok: true; id: string } | { ok: false; error: string } {
+    const { pathwayId, departmentId, patientRef, contactPhone, surgeonRef, startDate } = body;
+    if (!pathwayId || !departmentId || !patientRef || !startDate) {
+      return { ok: false, error: 'invalid_payload' };
+    }
+    const pathway = db.prepare('SELECT id FROM care_pathways WHERE id = ? AND tenant_id = ?').get(pathwayId, tenantId);
+    const department = db.prepare('SELECT id FROM departments WHERE id = ? AND tenant_id = ?').get(departmentId, tenantId);
+    if (!pathway || !department) {
+      return { ok: false, error: 'pathway_or_department_not_found' };
+    }
+    const episodeId = uid();
+    db.prepare(
+      `INSERT INTO patient_episodes (id, tenant_id, pathway_id, department_id, patient_ref_hash, contact_phone, surgeon_ref, start_date, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')`
+    ).run(episodeId, tenantId, pathwayId, departmentId, sha256(patientRef), contactPhone ?? null, surgeonRef ?? null, startDate);
+
+    const timepoints = db
+      .prepare('SELECT id, offset_days, instrument_ids_json FROM pathway_timepoints WHERE pathway_id = ?')
+      .all(pathwayId) as { id: string; offset_days: number; instrument_ids_json: string }[];
+    const insertAssignment = db.prepare(
+      'INSERT INTO prom_assignments (id, episode_id, timepoint_id, instrument_id, due_date, status) VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    const start = new Date(startDate);
+    for (const tp of timepoints) {
+      const due = new Date(start);
+      due.setDate(due.getDate() + tp.offset_days);
+      const instrumentIds = JSON.parse(tp.instrument_ids_json) as string[];
+      for (const instrumentId of instrumentIds) {
+        insertAssignment.run(uid(), episodeId, tp.id, instrumentId, due.toISOString(), 'scheduled');
+      }
+    }
+    return { ok: true, id: episodeId };
+  }
+
   router.post(
     '/episodes',
     requireRole('SystemAdmin', 'QualityManager', 'DepartmentManager'),
     express.json({ limit: '8kb' }),
     (req: Request, res: Response) => {
-      const { pathwayId, departmentId, patientRef, surgeonRef, startDate } = req.body as {
-        pathwayId?: string;
-        departmentId?: string;
-        patientRef?: string;
-        surgeonRef?: string;
-        startDate?: string;
-      };
-      if (!pathwayId || !departmentId || !patientRef || !startDate) {
-        res.status(400).json({ error: 'invalid_payload' });
+      const result = createEpisode(db, req.user!.tenantId, req.body);
+      if (!result.ok) {
+        res.status(result.error.endsWith('not_found') ? 404 : 400).json({ error: result.error });
         return;
       }
-      const episodeId = uid();
-      db.prepare(
-        `INSERT INTO patient_episodes (id, tenant_id, pathway_id, department_id, patient_ref_hash, surgeon_ref, start_date, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'active')`
-      ).run(episodeId, req.user!.tenantId, pathwayId, departmentId, sha256(patientRef), surgeonRef ?? null, startDate);
-
-      const timepoints = db
-        .prepare('SELECT id, offset_days, instrument_ids_json FROM pathway_timepoints WHERE pathway_id = ?')
-        .all(pathwayId) as { id: string; offset_days: number; instrument_ids_json: string }[];
-      const insertAssignment = db.prepare(
-        'INSERT INTO prom_assignments (id, episode_id, timepoint_id, instrument_id, due_date, status) VALUES (?, ?, ?, ?, ?, ?)'
-      );
-      const start = new Date(startDate);
-      for (const tp of timepoints) {
-        const due = new Date(start);
-        due.setDate(due.getDate() + tp.offset_days);
-        const instrumentIds = JSON.parse(tp.instrument_ids_json) as string[];
-        for (const instrumentId of instrumentIds) {
-          insertAssignment.run(uid(), episodeId, tp.id, instrumentId, due.toISOString(), 'scheduled');
-        }
-      }
-      logAudit(db, req.user!.tenantId, req.user!.id, 'episode_created', 'patient_episode', episodeId, null);
-      res.status(201).json({ id: episodeId });
+      logAudit(db, req.user!.tenantId, req.user!.id, 'episode_created', 'patient_episode', result.id, null);
+      res.status(201).json({ id: result.id });
     }
   );
+
+  router.get(
+    '/proms/due-assignments',
+    requireRole('SystemAdmin', 'QualityManager', 'DepartmentManager'),
+    (req: Request, res: Response) => {
+      const rows = db
+        .prepare(
+          `SELECT pa.id, pa.due_date, pa.status, pe.id as episode_id, pe.contact_phone, pe.surgeon_ref,
+                  pt.name_ar as timepoint_name_ar, pi.name_ar as instrument_name_ar, pi.license_status,
+                  cp.name_ar as pathway_name_ar
+           FROM prom_assignments pa
+           JOIN patient_episodes pe ON pe.id = pa.episode_id
+           JOIN pathway_timepoints pt ON pt.id = pa.timepoint_id
+           JOIN proms_instruments pi ON pi.id = pa.instrument_id
+           JOIN care_pathways cp ON cp.id = pe.pathway_id
+           WHERE pe.tenant_id = ? AND pa.status = 'scheduled' AND datetime(pa.due_date) <= datetime('now')
+           ORDER BY pa.due_date ASC`
+        )
+        .all(req.user!.tenantId);
+      res.json({ assignments: rows });
+    }
+  );
+
+  router.post(
+    '/assignments/:id/send',
+    requireRole('SystemAdmin', 'QualityManager', 'DepartmentManager'),
+    async (req: Request, res: Response) => {
+      const assignment = db
+        .prepare(
+          `SELECT pa.id, pa.status, pe.tenant_id, pe.contact_phone, pi.name_ar as instrument_name_ar, pi.name_en as instrument_name_en,
+                  pi.license_status, pt.name_ar as timepoint_name_ar
+           FROM prom_assignments pa
+           JOIN patient_episodes pe ON pe.id = pa.episode_id
+           JOIN proms_instruments pi ON pi.id = pa.instrument_id
+           JOIN pathway_timepoints pt ON pt.id = pa.timepoint_id
+           WHERE pa.id = ?`
+        )
+        .get(req.params.id) as
+        | {
+            id: string;
+            status: string;
+            tenant_id: string;
+            contact_phone: string | null;
+            instrument_name_ar: string;
+            instrument_name_en: string;
+            license_status: string;
+            timepoint_name_ar: string;
+          }
+        | undefined;
+      if (!assignment || assignment.tenant_id !== req.user!.tenantId) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      if (assignment.license_status !== 'free') {
+        res.status(409).json({ error: 'instrument_requires_manual_administration' });
+        return;
+      }
+      if (!assignment.contact_phone) {
+        res.status(409).json({ error: 'no_contact_phone_on_episode' });
+        return;
+      }
+      if (assignment.status !== 'scheduled') {
+        res.status(409).json({ error: 'assignment_not_scheduled' });
+        return;
+      }
+
+      const rawToken = uid();
+      const baseUrl = `${req.protocol}://${req.get('host')}`;
+      const formUrl = `${baseUrl}/p/${rawToken}`;
+      const smsConfig = getTenantSmsConfig(db, req.user!.tenantId);
+      const provider = createSmsProvider(smsConfig);
+      const message = composePromsMessage(
+        assignment.instrument_name_ar,
+        assignment.instrument_name_en,
+        assignment.timepoint_name_ar,
+        formUrl,
+        smsConfig.defaultLanguage
+      );
+      const result = await provider.send(assignment.contact_phone, message);
+
+      db.prepare("UPDATE prom_assignments SET token_hash = ?, status = 'sent', sent_at = datetime('now') WHERE id = ?").run(
+        sha256(rawToken),
+        assignment.id
+      );
+      logAudit(db, req.user!.tenantId, req.user!.id, 'proms_assignment_sent', 'prom_assignment', assignment.id, { ok: result.ok });
+      res.json({ ok: true, sent: result.ok });
+    }
+  );
+
 
   // -------------------------------------------------------------------------
   // Settings: integrations (SMS/WhatsApp provider + HIS webhook)
@@ -1556,7 +1837,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       defaultLanguage: row.default_language,
       hisWebhookEnabled: !!row.his_webhook_enabled,
       hisWebhookConfigured: !!row.his_webhook_key_hash,
-      hisWebhookUrl: `${baseUrl}/api/webhooks/invitations`
+      hisWebhookUrl: `${baseUrl}/api/webhooks/invitations`,
+      hisEpisodesWebhookUrl: `${baseUrl}/api/webhooks/episodes`
     });
   });
 

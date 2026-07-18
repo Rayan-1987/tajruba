@@ -170,7 +170,7 @@ export function provisionTenantDefaults(db: Db, root: string, tenantId: string):
     'INSERT INTO proms_instruments (id, tenant_id, code, name_ar, name_en, license_status, description_ar) VALUES (?, ?, ?, ?, ?, ?, ?)'
   );
   const insertInstrumentItem = db.prepare(
-    'INSERT INTO proms_instrument_items (id, instrument_id, code, text_ar, text_en, reverse_scored, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO proms_instrument_items (id, instrument_id, code, text_ar, text_en, reverse_scored, scale_max, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   );
   const insertPathway = db.prepare(
     'INSERT INTO care_pathways (id, tenant_id, code, name_ar, name_en) VALUES (?, ?, ?, ?, ?)'
@@ -268,7 +268,7 @@ export function provisionTenantDefaults(db: Db, root: string, tenantId: string):
     instrumentIds[instrument.code] = id;
     insertInstrument.run(id, tenantId, instrument.code, instrument.nameAr, instrument.nameEn, instrument.licenseStatus, instrument.descriptionAr);
     instrument.items.forEach((item, index) => {
-      insertInstrumentItem.run(uid(), id, item.code, item.textAr, item.textEn, item.reverseScored ? 1 : 0, index);
+      insertInstrumentItem.run(uid(), id, item.code, item.textAr, item.textEn, item.reverseScored ? 1 : 0, item.scaleMax, index);
     });
   }
 

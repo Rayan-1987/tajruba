@@ -92,3 +92,17 @@ export function composeResolutionMessage(hospitalNameAr: string, hospitalNameEn:
   }
   return `${hospitalNameAr}: شكرًا لتواصلك معنا، تم النظر في ملاحظتك ومعالجتها. نقدّر مساهمتك في تحسين الخدمة.`;
 }
+
+/** Composes the PROMs follow-up SMS sent when a scheduled assignment is due. */
+export function composePromsMessage(
+  instrumentNameAr: string,
+  instrumentNameEn: string,
+  timepointNameAr: string,
+  formUrl: string,
+  language: 'ar' | 'en'
+): string {
+  if (language === 'en') {
+    return `Please complete "${instrumentNameEn}" (${timepointNameAr}) so we can track your recovery — ${formUrl}`;
+  }
+  return `نرجو تعبئة "${instrumentNameAr}" (${timepointNameAr}) لمتابعة حالتك الصحية — ${formUrl}`;
+}

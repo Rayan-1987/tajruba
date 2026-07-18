@@ -9,6 +9,7 @@ interface IntegrationsSettings {
   hisWebhookEnabled: boolean;
   hisWebhookConfigured: boolean;
   hisWebhookUrl: string;
+  hisEpisodesWebhookUrl: string;
 }
 
 interface DncEntry {
@@ -183,16 +184,23 @@ export default function Settings() {
       <div className="rounded-2xl bg-white p-4 shadow-sm">
         <h3 className="mb-1 text-sm font-semibold text-slate-700">الربط مع نظام المستشفى (HIS/EMR)</h3>
         <p className="mb-3 text-xs text-slate-500">
-          أعط فريق تقنية المعلومات في المستشفى الرابط والمفتاح أدناه ليتمكنوا من إرسال دعوات استبيان تلقائيًا عند خروج
-          كل مريض، دون الحاجة لتسجيل دخول بشري.
+          أعط فريق تقنية المعلومات في المستشفى المفتاح أدناه ليتمكنوا من ربط نظامهم بمنصة تجربة — نفس المفتاح يُستخدم
+          لإرسال دعوات الاستبيانات تلقائيًا عند خروج كل مريض، ولبدء حلقات متابعة PROMs تلقائيًا (مثل برنامج استبدال
+          مفصل الركبة) دون الحاجة لتسجيل دخول بشري.
         </p>
         <div className="mb-3 rounded-lg bg-slate-50 p-3 text-xs">
-          <p className="mb-1 font-semibold text-slate-600">رابط الـ Webhook (POST):</p>
+          <p className="mb-1 font-semibold text-slate-600">١. دعوات الاستبيانات (POST):</p>
           <code className="break-all text-slate-700">{settings.hisWebhookUrl}</code>
-          <p className="mb-1 mt-2 font-semibold text-slate-600">الترويسة المطلوبة (Header):</p>
-          <code className="text-slate-700">X-Api-Key: &lt;المفتاح&gt;</code>
           <p className="mb-1 mt-2 font-semibold text-slate-600">نص الطلب (Body، JSON):</p>
           <code className="text-slate-700">{'{ "templateId": "...", "departmentId": "...", "rows": [{ "phone": "05xxxxxxxx" }] }'}</code>
+          <p className="mb-1 mt-3 font-semibold text-slate-600">٢. بدء حلقة متابعة PROMs (POST):</p>
+          <code className="break-all text-slate-700">{settings.hisEpisodesWebhookUrl}</code>
+          <p className="mb-1 mt-2 font-semibold text-slate-600">نص الطلب (Body، JSON):</p>
+          <code className="text-slate-700">
+            {'{ "pathwayId": "...", "departmentId": "...", "patientRef": "MRN123", "contactPhone": "05xxxxxxxx", "startDate": "2026-01-01" }'}
+          </code>
+          <p className="mb-1 mt-3 font-semibold text-slate-600">الترويسة المطلوبة لكلا الرابطين (Header):</p>
+          <code className="text-slate-700">X-Api-Key: &lt;المفتاح&gt;</code>
         </div>
         <p className="mb-2 text-xs text-slate-500">
           الحالة: {settings.hisWebhookConfigured ? (settings.hisWebhookEnabled ? '✅ مفعّل' : '⏸️ موقوف') : 'لم يتم توليد مفتاح بعد'}

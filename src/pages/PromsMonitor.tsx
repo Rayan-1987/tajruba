@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { api } from '../api';
+import type { Department } from '../types';
 
 interface Pathway {
   id: string;
@@ -36,12 +37,27 @@ interface Instrument {
   description_ar: string;
 }
 
+interface DueAssignment {
+  id: string;
+  due_date: string;
+  status: string;
+  episode_id: string;
+  contact_phone: string | null;
+  surgeon_ref: string | null;
+  timepoint_name_ar: string;
+  instrument_name_ar: string;
+  license_status: 'free' | 'licensed_required';
+  pathway_name_ar: string;
+}
+
 export default function PromsMonitor() {
   const [pathways, setPathways] = useState<Pathway[]>([]);
   const [pathwayId, setPathwayId] = useState('');
   const [episodes, setEpisodes] = useState<Episode[]>([]);
   const [mcidSummary, setMcidSummary] = useState<{ timepoint: string; total: number; mcidMetPercent: number | null }[]>([]);
   const [instruments, setInstruments] = useState<Instrument[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [dueRefreshKey, setDueRefreshKey] = useState(0);
 
   useEffect(() => {
     api.get<{ pathways: Pathway[] }>('/proms/pathways').then((res) => {
@@ -49,9 +65,10 @@ export default function PromsMonitor() {
       if (res.pathways.length > 0) setPathwayId(res.pathways[0].id);
     });
     api.get<{ instruments: Instrument[] }>('/proms/instruments').then((res) => setInstruments(res.instruments));
+    api.get<{ departments: Department[] }>('/departments').then((res) => setDepartments(res.departments));
   }, []);
 
-  useEffect(() => {
+  const loadOutcomes = () => {
     if (!pathwayId) return;
     api
       .get<{ episodes: Episode[]; mcidSummary: { timepoint: string; total: number; mcidMetPercent: number | null }[] }>(
@@ -61,7 +78,8 @@ export default function PromsMonitor() {
         setEpisodes(res.episodes);
         setMcidSummary(res.mcidSummary);
       });
-  }, [pathwayId]);
+  };
+  useEffect(loadOutcomes, [pathwayId]);
 
   const pathway = pathways.find((p) => p.id === pathwayId);
 
@@ -71,6 +89,16 @@ export default function PromsMonitor() {
         <h2 className="text-xl font-bold text-slate-800">النتائج الصحية المبلغة من المريض (PROMs)</h2>
         <p className="text-sm text-slate-500">قياس طولي عبر مسار الرعاية، مع نسبة تجاوز الحد السريري MCID</p>
       </div>
+
+      <CreateEpisodeForm
+        pathways={pathways}
+        departments={departments}
+        onCreated={() => {
+          loadOutcomes();
+          setDueRefreshKey((k) => k + 1);
+        }}
+      />
+      <DueAssignmentsPanel refreshKey={dueRefreshKey} />
 
       <select value={pathwayId} onChange={(e) => setPathwayId(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
         {pathways.map((p) => (
@@ -148,6 +176,174 @@ export default function PromsMonitor() {
               </span>
             </div>
             <p className="text-xs text-slate-500">{i.description_ar}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CreateEpisodeForm({
+  pathways,
+  departments,
+  onCreated
+}: {
+  pathways: Pathway[];
+  departments: Department[];
+  onCreated: () => void;
+}) {
+  const [pathwayId, setPathwayId] = useState('');
+  const [departmentId, setDepartmentId] = useState('');
+  const [patientRef, setPatientRef] = useState('');
+  const [contactPhone, setContactPhone] = useState('');
+  const [surgeonRef, setSurgeonRef] = useState('');
+  const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [result, setResult] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!pathwayId || !departmentId || !patientRef || !startDate) {
+      setResult('يرجى اختيار المسار والقسم وإدخال مرجع المريض وتاريخ البدء.');
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.post('/episodes', {
+        pathwayId,
+        departmentId,
+        patientRef,
+        contactPhone: contactPhone || undefined,
+        surgeonRef: surgeonRef || undefined,
+        startDate
+      });
+      setResult('تم إنشاء الحلقة وجدولة تكليفاتها بنجاح.');
+      setPatientRef('');
+      setContactPhone('');
+      setSurgeonRef('');
+      onCreated();
+    } catch {
+      setResult('تعذر إنشاء الحلقة، حاول مرة أخرى.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-2xl bg-white p-4 shadow-sm">
+      <h3 className="mb-1 text-sm font-semibold text-slate-700">إنشاء حلقة رعاية جديدة (Episode)</h3>
+      <p className="mb-3 text-xs text-slate-500">
+        يُنشئ تلقائيًا كل التكليفات (Assignments) لكل نقطة قياس في المسار، بتاريخ استحقاق محسوب من تاريخ البدء.
+      </p>
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <select value={pathwayId} onChange={(e) => setPathwayId(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          <option value="">اختر المسار</option>
+          {pathways.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name_ar}
+            </option>
+          ))}
+        </select>
+        <select value={departmentId} onChange={(e) => setDepartmentId(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          <option value="">اختر القسم</option>
+          {departments.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.name_ar}
+            </option>
+          ))}
+        </select>
+        <input
+          type="date"
+          value={startDate}
+          onChange={(e) => setStartDate(e.target.value)}
+          className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+        />
+        <input
+          value={patientRef}
+          onChange={(e) => setPatientRef(e.target.value)}
+          placeholder="مرجع المريض (رقم الملف)"
+          className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+        />
+        <input
+          value={contactPhone}
+          onChange={(e) => setContactPhone(e.target.value)}
+          placeholder="رقم جوال المريض (للمتابعة الطولية)"
+          className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+        />
+        <input
+          value={surgeonRef}
+          onChange={(e) => setSurgeonRef(e.target.value)}
+          placeholder="الجرّاح / الطبيب المعالج (اختياري)"
+          className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+        />
+      </div>
+      <button
+        type="button"
+        onClick={submit}
+        disabled={busy}
+        className="mt-3 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+      >
+        {busy ? 'جارِ الإنشاء...' : 'إنشاء الحلقة'}
+      </button>
+      {result && <p className="mt-2 text-sm text-slate-600">{result}</p>}
+    </div>
+  );
+}
+
+function DueAssignmentsPanel({ refreshKey }: { refreshKey: number }) {
+  const [assignments, setAssignments] = useState<DueAssignment[]>([]);
+  const [sendingId, setSendingId] = useState<string | null>(null);
+  const [resultById, setResultById] = useState<Record<string, string>>({});
+
+  const load = () => {
+    api.get<{ assignments: DueAssignment[] }>('/proms/due-assignments').then((res) => setAssignments(res.assignments));
+  };
+  useEffect(load, [refreshKey]);
+
+  const send = async (a: DueAssignment) => {
+    setSendingId(a.id);
+    try {
+      const res = await api.post<{ ok: boolean; sent: boolean }>(`/assignments/${a.id}/send`);
+      setResultById((prev) => ({ ...prev, [a.id]: res.sent ? 'تم الإرسال بنجاح' : 'تعذر إرسال الرسالة' }));
+      load();
+    } catch {
+      setResultById((prev) => ({ ...prev, [a.id]: 'تعذر الإرسال — تحقق من رقم الجوال أو أن الأداة مجانية' }));
+    } finally {
+      setSendingId(null);
+    }
+  };
+
+  if (assignments.length === 0) return null;
+
+  return (
+    <div className="rounded-2xl bg-white p-4 shadow-sm">
+      <h3 className="mb-1 text-sm font-semibold text-slate-700">التكليفات المستحقة ({assignments.length})</h3>
+      <p className="mb-3 text-xs text-slate-500">تكليفات وصلت تاريخ استحقاقها ولم تُرسل بعد.</p>
+      <div className="space-y-2">
+        {assignments.map((a) => (
+          <div key={a.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-100 p-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-700">
+                {a.instrument_name_ar} — {a.timepoint_name_ar}
+              </p>
+              <p className="text-xs text-slate-400">
+                {a.pathway_name_ar} · {a.surgeon_ref ?? 'بلا جرّاح محدد'} · استحق في {new Date(a.due_date).toLocaleDateString('ar-SA')}
+              </p>
+              {resultById[a.id] && <p className="mt-1 text-xs text-slate-500">{resultById[a.id]}</p>}
+            </div>
+            {a.license_status !== 'free' ? (
+              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">تتطلب تعبئة يدوية (أداة مرخّصة)</span>
+            ) : !a.contact_phone ? (
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500">لا يوجد رقم جوال للحلقة</span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => send(a)}
+                disabled={sendingId === a.id}
+                className="rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+              >
+                {sendingId === a.id ? 'جارِ الإرسال...' : 'إرسال'}
+              </button>
+            )}
           </div>
         ))}
       </div>
