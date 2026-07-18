@@ -5,7 +5,7 @@ import type { Db } from './db.ts';
 import { hashPassword } from './auth.ts';
 import { redactPii, createDefaultAnalyzer, shouldAlert } from './comments.ts';
 import { scoreInstrument, VAS_PAIN, type InstrumentItemValue } from './scoring.ts';
-import { provisionTenantDefaults } from './provisioning.ts';
+import { DEFAULT_DEPARTMENTS, provisionTenantDefaults } from './provisioning.ts';
 import type { AnswerType, ServiceType } from './types.ts';
 
 interface DomainSeed {
@@ -149,20 +149,22 @@ export function seedDatabase(db: Db, root: string): void {
   const facilityId = uid();
   insertFacility.run(facilityId, tenantId, 'المستشفى الرئيسي', 'Main Campus');
 
-  const serviceDeptNames: Record<ServiceType, { ar: string; en: string }> = {
-    MP: { ar: 'الممارسة الطبية (العيادات)', en: 'Medical Practice Clinics' },
-    IP: { ar: 'التنويم - الباطني', en: 'Inpatient - Internal Medicine' },
-    ED: { ar: 'الطوارئ', en: 'Emergency Department' },
-    AS: { ar: 'الجراحة النهارية', en: 'Ambulatory Surgery' },
-    HH: { ar: 'الرعاية المنزلية', en: 'Home Health' },
-    BB: { ar: 'بنك الدم', en: 'Blood Bank' }
-  };
-  const departmentIds: Record<ServiceType, string> = {} as Record<ServiceType, string>;
-  for (const [service, names] of Object.entries(serviceDeptNames) as [ServiceType, { ar: string; en: string }][]) {
+  // Inpatient is split into its usual wards (not one lump department) — same default
+  // breakdown a newly self-registered hospital gets, so the demo tenant is representative.
+  const departmentsByService: Record<ServiceType, string[]> = { MP: [], IP: [], ED: [], AS: [], HH: [], BB: [] };
+  for (const dept of DEFAULT_DEPARTMENTS) {
     const id = uid();
-    departmentIds[service] = id;
-    insertDept.run(id, tenantId, facilityId, names.ar, names.en, service);
+    departmentsByService[dept.service].push(id);
+    insertDept.run(id, tenantId, facilityId, dept.nameAr, dept.nameEn, dept.service);
   }
+  const departmentIds: Record<ServiceType, string> = {
+    MP: departmentsByService.MP[0],
+    IP: departmentsByService.IP[0],
+    ED: departmentsByService.ED[0],
+    AS: departmentsByService.AS[0],
+    HH: departmentsByService.HH[0],
+    BB: departmentsByService.BB[0]
+  };
 
   // --- Users -----------------------------------------------------------------
   const adminId = uid();
@@ -185,10 +187,15 @@ export function seedDatabase(db: Db, root: string): void {
   // --- Question bank, templates, PROMs catalog, care pathways (per-tenant copy) ---
   const { templateIds, questionIds, instrumentIds, pathwayIds } = provisionTenantDefaults(db, root, tenantId);
 
-  // --- Demo responses across the last 6 months per department ------------
+  // --- Demo responses across the last 6 months per department (each Inpatient ward gets its own) ---
   let commentIndex = 0;
-  for (const service of Object.keys(serviceDeptNames) as ServiceType[]) {
-    const deptId = departmentIds[service];
+  const nextDeptIndexByService: Record<ServiceType, number> = { MP: 0, IP: 0, ED: 0, AS: 0, HH: 0, BB: 0 };
+  for (const deptDef of DEFAULT_DEPARTMENTS) {
+    const service = deptDef.service;
+    const deptId = departmentsByService[service][nextDeptIndexByService[service]];
+    const isFirstDeptForService = nextDeptIndexByService[service] === 0;
+    nextDeptIndexByService[service] += 1;
+
     const templateId = templateIds[service];
     const questionsForService = bank.questions.filter(
       (q) => bank.domains.find((d) => d.code === q.domain)!.service === service

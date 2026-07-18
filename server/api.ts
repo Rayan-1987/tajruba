@@ -24,9 +24,9 @@ import {
   scoreYesNo,
   type InstrumentItemValue
 } from './scoring.ts';
-import { DEFAULT_DEPARTMENT_NAMES, provisionTenantDefaults } from './provisioning.ts';
+import { DEFAULT_DEPARTMENTS, provisionTenantDefaults } from './provisioning.ts';
 import { composeInvitationMessage, createSmsProvider, type TenantSmsConfig } from './sms.ts';
-import { SERVICE_TYPES, type AnswerType, type RecoveryStatus, type Role, type ServiceType } from './types.ts';
+import type { AnswerType, RecoveryStatus, Role, ServiceType } from './types.ts';
 
 function uid(): string {
   return randomUUID();
@@ -298,8 +298,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     const insertDepartment = db.prepare(
       'INSERT INTO departments (id, tenant_id, facility_id, name_ar, name_en, service_type) VALUES (?, ?, ?, ?, ?, ?)'
     );
-    for (const service of SERVICE_TYPES) {
-      insertDepartment.run(uid(), tenantId, facilityId, DEFAULT_DEPARTMENT_NAMES[service].ar, DEFAULT_DEPARTMENT_NAMES[service].en, service);
+    for (const dept of DEFAULT_DEPARTMENTS) {
+      insertDepartment.run(uid(), tenantId, facilityId, dept.nameAr, dept.nameEn, dept.service);
     }
 
     provisionTenantDefaults(db, root, tenantId);

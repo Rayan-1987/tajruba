@@ -86,14 +86,26 @@ const TEMPLATE_NAMES: Record<ServiceType, { ar: string; en: string }> = {
   BB: { ar: 'استبيان بنك الدم', en: 'Blood Bank Experience Survey' }
 };
 
-export const DEFAULT_DEPARTMENT_NAMES: Record<ServiceType, { ar: string; en: string }> = {
-  MP: { ar: 'الممارسة الطبية (العيادات)', en: 'Medical Practice Clinics' },
-  IP: { ar: 'التنويم', en: 'Inpatient' },
-  ED: { ar: 'الطوارئ', en: 'Emergency Department' },
-  AS: { ar: 'الجراحة النهارية', en: 'Ambulatory Surgery' },
-  HH: { ar: 'الرعاية المنزلية', en: 'Home Health' },
-  BB: { ar: 'بنك الدم', en: 'Blood Bank' }
-};
+/**
+ * Default departments provisioned for a newly-registered hospital. Every service line gets
+ * one department, EXCEPT Inpatient — a real hospital's inpatient population is never one
+ * ward, so it's split into the wards found in almost every general hospital. All wards
+ * under the same service line share the same survey template (the PREMs questions are the
+ * same regardless of which ward), only the department (and therefore the reporting
+ * breakdown) differs.
+ */
+export const DEFAULT_DEPARTMENTS: { service: ServiceType; nameAr: string; nameEn: string }[] = [
+  { service: 'MP', nameAr: 'الممارسة الطبية (العيادات)', nameEn: 'Medical Practice Clinics' },
+  { service: 'IP', nameAr: 'التنويم - الباطني', nameEn: 'Inpatient - Internal Medicine' },
+  { service: 'IP', nameAr: 'التنويم - الجراحة العامة', nameEn: 'Inpatient - General Surgery' },
+  { service: 'IP', nameAr: 'التنويم - العناية المركزة', nameEn: 'Inpatient - ICU' },
+  { service: 'IP', nameAr: 'التنويم - النساء والولادة', nameEn: 'Inpatient - Obstetrics & Gynecology' },
+  { service: 'IP', nameAr: 'التنويم - الأطفال', nameEn: 'Inpatient - Pediatrics' },
+  { service: 'ED', nameAr: 'الطوارئ', nameEn: 'Emergency Department' },
+  { service: 'AS', nameAr: 'الجراحة النهارية', nameEn: 'Ambulatory Surgery' },
+  { service: 'HH', nameAr: 'الرعاية المنزلية', nameEn: 'Home Health' },
+  { service: 'BB', nameAr: 'بنك الدم', nameEn: 'Blood Bank' }
+];
 
 export interface TenantProvisioningResult {
   templateIds: Record<ServiceType, string>;

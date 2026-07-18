@@ -80,8 +80,9 @@ test('a freshly-registered hospital gets its own independent question bank and d
     const departments = (await (await fetch(`${baseUrl}/api/departments`, { headers: { cookie } })).json()) as {
       departments: { name_ar: string }[];
     };
-    // Should have its own 6 main service-line departments, freshly provisioned.
-    assert.equal(departments.departments.length, 6);
+    // Should have its own freshly-provisioned departments across all 6 service lines
+    // (Inpatient alone is split into 5 wards).
+    assert.equal(departments.departments.length, 10);
 
     const bank = (await (await fetch(`${baseUrl}/api/question-bank`, { headers: { cookie } })).json()) as {
       domains: unknown[];

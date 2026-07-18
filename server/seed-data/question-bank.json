@@ -7,6 +7,9 @@
     { "code": "ED_PRV", "nameAr": "الخصوصية", "nameEn": "Privacy", "service": "ED", "benchmark": 4.0 },
     { "code": "ED_PAIN", "nameAr": "إدارة الألم", "nameEn": "Pain Management", "service": "ED", "benchmark": 3.8 },
     { "code": "ED_DIS", "nameAr": "الخروج والتعليمات", "nameEn": "Discharge & Instructions", "service": "ED", "benchmark": 3.9 },
+    { "code": "ED_EMO", "nameAr": "الدعم النفسي والعاطفي", "nameEn": "Emotional Support", "service": "ED", "benchmark": 3.9 },
+    { "code": "ED_FAM", "nameAr": "إشراك الأسرة", "nameEn": "Family Involvement", "service": "ED", "benchmark": 3.9 },
+    { "code": "ED_COORD", "nameAr": "تنسيق الرعاية", "nameEn": "Care Coordination", "service": "ED", "benchmark": 3.9 },
     { "code": "ED_OVR", "nameAr": "التقييم العام", "nameEn": "Overall", "service": "ED", "benchmark": 4.0 },
 
     { "code": "IP_NUR", "nameAr": "التمريض", "nameEn": "Nursing", "service": "IP", "benchmark": 4.3 },
@@ -17,6 +20,9 @@
     { "code": "IP_PAIN", "nameAr": "إدارة الألم", "nameEn": "Pain Management", "service": "IP", "benchmark": 3.9 },
     { "code": "IP_FOOD", "nameAr": "الطعام", "nameEn": "Food", "service": "IP", "benchmark": 3.5 },
     { "code": "IP_DIS", "nameAr": "الخروج والتعليمات", "nameEn": "Discharge & Instructions", "service": "IP", "benchmark": 3.9 },
+    { "code": "IP_EMO", "nameAr": "الدعم النفسي والعاطفي", "nameEn": "Emotional Support", "service": "IP", "benchmark": 3.9 },
+    { "code": "IP_FAM", "nameAr": "إشراك الأسرة", "nameEn": "Family Involvement", "service": "IP", "benchmark": 4.0 },
+    { "code": "IP_COORD", "nameAr": "تنسيق الرعاية", "nameEn": "Care Coordination", "service": "IP", "benchmark": 3.9 },
     { "code": "IP_OVR", "nameAr": "التقييم العام", "nameEn": "Overall", "service": "IP", "benchmark": 4.1 },
 
     { "code": "MP_ACC", "nameAr": "الوصول والانتظار", "nameEn": "Access & Waiting", "service": "MP", "benchmark": 3.8 },
@@ -24,12 +30,18 @@
     { "code": "MP_PHY", "nameAr": "الأطباء", "nameEn": "Physicians", "service": "MP", "benchmark": 4.2 },
     { "code": "MP_COM", "nameAr": "التواصل", "nameEn": "Communication", "service": "MP", "benchmark": 4.0 },
     { "code": "MP_PRV", "nameAr": "الخصوصية", "nameEn": "Privacy", "service": "MP", "benchmark": 4.1 },
+    { "code": "MP_EMO", "nameAr": "الدعم النفسي والعاطفي", "nameEn": "Emotional Support", "service": "MP", "benchmark": 3.9 },
+    { "code": "MP_FAM", "nameAr": "إشراك الأسرة", "nameEn": "Family Involvement", "service": "MP", "benchmark": 3.9 },
+    { "code": "MP_COORD", "nameAr": "تنسيق الرعاية", "nameEn": "Care Coordination", "service": "MP", "benchmark": 3.9 },
     { "code": "MP_OVR", "nameAr": "التقييم العام", "nameEn": "Overall", "service": "MP", "benchmark": 4.0 },
 
     { "code": "HH_APT", "nameAr": "المواعيد", "nameEn": "Appointments", "service": "HH", "benchmark": 4.0 },
     { "code": "HH_NUR", "nameAr": "التمريض", "nameEn": "Nursing", "service": "HH", "benchmark": 4.3 },
     { "code": "HH_COM", "nameAr": "التواصل", "nameEn": "Communication", "service": "HH", "benchmark": 4.1 },
     { "code": "HH_PRV", "nameAr": "الخصوصية", "nameEn": "Privacy", "service": "HH", "benchmark": 4.2 },
+    { "code": "HH_EMO", "nameAr": "الدعم النفسي والعاطفي", "nameEn": "Emotional Support", "service": "HH", "benchmark": 4.0 },
+    { "code": "HH_FAM", "nameAr": "إشراك الأسرة", "nameEn": "Family Involvement", "service": "HH", "benchmark": 4.1 },
+    { "code": "HH_COORD", "nameAr": "تنسيق الرعاية", "nameEn": "Care Coordination", "service": "HH", "benchmark": 4.0 },
     { "code": "HH_OVR", "nameAr": "التقييم العام", "nameEn": "Overall", "service": "HH", "benchmark": 4.2 },
 
     { "code": "AS_ACC", "nameAr": "الوصول والانتظار", "nameEn": "Access & Waiting", "service": "AS", "benchmark": 3.9 },
@@ -38,12 +50,18 @@
     { "code": "AS_STF", "nameAr": "الطاقم الطبي والتمريضي", "nameEn": "Surgical & Nursing Staff", "service": "AS", "benchmark": 4.3 },
     { "code": "AS_PAIN", "nameAr": "إدارة الألم", "nameEn": "Pain Management", "service": "AS", "benchmark": 3.9 },
     { "code": "AS_DIS", "nameAr": "الخروج والتعافي", "nameEn": "Discharge & Recovery", "service": "AS", "benchmark": 4.0 },
+    { "code": "AS_EMO", "nameAr": "الدعم النفسي والعاطفي", "nameEn": "Emotional Support", "service": "AS", "benchmark": 3.9 },
+    { "code": "AS_FAM", "nameAr": "إشراك الأسرة", "nameEn": "Family Involvement", "service": "AS", "benchmark": 3.9 },
+    { "code": "AS_COORD", "nameAr": "تنسيق الرعاية", "nameEn": "Care Coordination", "service": "AS", "benchmark": 4.0 },
     { "code": "AS_OVR", "nameAr": "التقييم العام", "nameEn": "Overall", "service": "AS", "benchmark": 4.1 },
 
     { "code": "BB_ACC", "nameAr": "الوصول والانتظار", "nameEn": "Access & Waiting", "service": "BB", "benchmark": 3.9 },
     { "code": "BB_STF", "nameAr": "الموظفون", "nameEn": "Staff", "service": "BB", "benchmark": 4.3 },
     { "code": "BB_COM", "nameAr": "التواصل", "nameEn": "Communication", "service": "BB", "benchmark": 4.0 },
     { "code": "BB_SAFE", "nameAr": "الراحة والسلامة", "nameEn": "Comfort & Safety", "service": "BB", "benchmark": 4.2 },
+    { "code": "BB_EMO", "nameAr": "الدعم النفسي والعاطفي", "nameEn": "Emotional Support", "service": "BB", "benchmark": 4.0 },
+    { "code": "BB_FAM", "nameAr": "إشراك الأسرة", "nameEn": "Family Involvement", "service": "BB", "benchmark": 4.0 },
+    { "code": "BB_COORD", "nameAr": "تنسيق الرعاية", "nameEn": "Care Coordination", "service": "BB", "benchmark": 4.0 },
     { "code": "BB_OVR", "nameAr": "التقييم العام", "nameEn": "Overall", "service": "BB", "benchmark": 4.1 }
   ],
   "questions": [
@@ -60,6 +78,9 @@
     { "code": "ED-PAIN-001", "domain": "ED_PAIN", "textAr": "تمت السيطرة على الألم بشكل مناسب", "textEn": "My pain was managed appropriately", "type": "likert5", "requiresAlert": true },
     { "code": "ED-DIS-001", "domain": "ED_DIS", "textAr": "استلمت تعليمات واضحة عند الخروج", "textEn": "I received clear discharge instructions", "type": "likert5" },
     { "code": "ED-DIS-002", "domain": "ED_DIS", "textAr": "تم شرح الأدوية الموصوفة لي بوضوح", "textEn": "My prescribed medications were explained clearly", "type": "likert5" },
+    { "code": "ED-EMO-001", "domain": "ED_EMO", "textAr": "شعرت أن الطاقم الطبي راعى قلقي وخوفي أثناء الزيارة", "textEn": "I felt the medical team was attentive to my anxiety and fear during the visit", "type": "likert5" },
+    { "code": "ED-FAM-001", "domain": "ED_FAM", "textAr": "تم إشراك مرافقي أو أسرتي في المعلومات المتعلقة بحالتي", "textEn": "My companion/family was included in information about my condition", "type": "likert5" },
+    { "code": "ED-COORD-001", "domain": "ED_COORD", "textAr": "شعرت أن الفريق الطبي والتمريضي والإداري ينسّقون فيما بينهم بسلاسة", "textEn": "I felt the medical, nursing, and administrative teams coordinated smoothly", "type": "likert5" },
     { "code": "ED-OVR-001", "domain": "ED_OVR", "textAr": "تقييمي العام لتجربتي في الطوارئ", "textEn": "Overall rating of my ED experience", "type": "likert5" },
     { "code": "ED-OVR-002", "domain": "ED_OVR", "textAr": "ما مدى احتمالية أن توصي بهذا القسم؟ (0 إلى 10)", "textEn": "How likely are you to recommend this department? (0-10)", "type": "nps" },
 
@@ -77,6 +98,9 @@
     { "code": "IP-FOOD-002", "domain": "IP_FOOD", "textAr": "مناسبة الطعام لحالتي الصحية", "textEn": "Food suited my health condition", "type": "likert5" },
     { "code": "IP-DIS-001", "domain": "IP_DIS", "textAr": "وضوح تعليمات الخروج", "textEn": "Clarity of discharge instructions", "type": "likert5" },
     { "code": "IP-DIS-002", "domain": "IP_DIS", "textAr": "التنسيق لمتابعة ما بعد الخروج", "textEn": "Coordination for post-discharge follow-up", "type": "likert5" },
+    { "code": "IP-EMO-001", "domain": "IP_EMO", "textAr": "شعرت بدعم نفسي كافٍ من الطاقم خلال فترة التنويم", "textEn": "I felt adequately emotionally supported by staff during my stay", "type": "likert5" },
+    { "code": "IP-FAM-001", "domain": "IP_FAM", "textAr": "تم تحديث أسرتي بانتظام حول تقدم حالتي", "textEn": "My family was regularly updated on my progress", "type": "likert5" },
+    { "code": "IP-COORD-001", "domain": "IP_COORD", "textAr": "لاحظت تنسيقًا جيدًا بين الأقسام المختلفة (تمريض، أطباء، مختبر، أشعة) خلال إقامتي", "textEn": "I noticed good coordination between different departments during my stay", "type": "likert5" },
     { "code": "IP-OVR-001", "domain": "IP_OVR", "textAr": "التقييم العام لإقامتي في المستشفى", "textEn": "Overall rating of the hospital stay", "type": "likert5" },
     { "code": "IP-OVR-002", "domain": "IP_OVR", "textAr": "ما مدى احتمالية أن توصي بهذا المستشفى؟ (0 إلى 10)", "textEn": "How likely are you to recommend this hospital? (0-10)", "type": "nps" },
 
@@ -89,6 +113,9 @@
     { "code": "MP-PHY-003", "domain": "MP_PHY", "textAr": "إشراكي في قرار خطة العلاج", "textEn": "Involvement in the treatment plan decision", "type": "likert5" },
     { "code": "MP-COM-001", "domain": "MP_COM", "textAr": "سهولة التواصل مع العيادة لمتابعة استفساراتي", "textEn": "Ease of follow-up communication with the clinic", "type": "likert5" },
     { "code": "MP-PRV-001", "domain": "MP_PRV", "textAr": "الخصوصية أثناء الاستشارة", "textEn": "Privacy during the consultation", "type": "likert5" },
+    { "code": "MP-EMO-001", "domain": "MP_EMO", "textAr": "شعرت أن الطبيب تفهّم قلقي بخصوص حالتي", "textEn": "I felt the physician understood my concerns about my condition", "type": "likert5" },
+    { "code": "MP-FAM-001", "domain": "MP_FAM", "textAr": "تم السماح لمرافقي بالمشاركة في الاستشارة عند الحاجة", "textEn": "My companion was allowed to participate in the consultation when needed", "type": "likert5" },
+    { "code": "MP-COORD-001", "domain": "MP_COORD", "textAr": "شعرت أن المعلومات تنتقل بسلاسة بين طبيبي وباقي الفريق الطبي", "textEn": "I felt information flowed smoothly between my physician and the rest of the care team", "type": "likert5" },
     { "code": "MP-OVR-001", "domain": "MP_OVR", "textAr": "التقييم العام لزيارة العيادة", "textEn": "Overall rating of the clinic visit", "type": "likert5" },
     { "code": "MP-OVR-002", "domain": "MP_OVR", "textAr": "ما مدى احتمالية أن توصي بهذه العيادة؟ (0 إلى 10)", "textEn": "How likely are you to recommend this clinic? (0-10)", "type": "nps" },
 
@@ -97,6 +124,9 @@
     { "code": "HH-NUR-002", "domain": "HH_NUR", "textAr": "اهتمام الطاقم باحتياجات المريض", "textEn": "Staff attentiveness to the patient's needs", "type": "likert5" },
     { "code": "HH-COM-001", "domain": "HH_COM", "textAr": "وضوح تعليمات الرعاية المقدمة للأسرة", "textEn": "Clarity of care instructions given to the family", "type": "likert5" },
     { "code": "HH-PRV-001", "domain": "HH_PRV", "textAr": "احترام خصوصية المنزل والمريض", "textEn": "Respect for home and patient privacy", "type": "likert5" },
+    { "code": "HH-EMO-001", "domain": "HH_EMO", "textAr": "شعر المريض وأسرته بالطمأنينة من تعامل الفريق", "textEn": "The patient and family felt reassured by the team's handling", "type": "likert5" },
+    { "code": "HH-FAM-001", "domain": "HH_FAM", "textAr": "تم إشراك أفراد الأسرة في تعلم كيفية تقديم الرعاية", "textEn": "Family members were involved in learning how to provide care", "type": "likert5" },
+    { "code": "HH-COORD-001", "domain": "HH_COORD", "textAr": "لاحظت تنسيقًا جيدًا بين فريق الرعاية المنزلية والمستشفى", "textEn": "I noticed good coordination between the home health team and the hospital", "type": "likert5" },
     { "code": "HH-OVR-001", "domain": "HH_OVR", "textAr": "التقييم العام لخدمة الرعاية المنزلية", "textEn": "Overall rating of the home health service", "type": "likert5" },
     { "code": "HH-OVR-002", "domain": "HH_OVR", "textAr": "ما مدى احتمالية أن توصي بخدمة الرعاية المنزلية؟ (0 إلى 10)", "textEn": "How likely are you to recommend the home health service? (0-10)", "type": "nps" },
 
@@ -109,6 +139,9 @@
     { "code": "AS-PAIN-001", "domain": "AS_PAIN", "textAr": "تمت السيطرة على الألم بعد الإجراء بشكل مناسب", "textEn": "My pain was managed appropriately after the procedure", "type": "likert5", "requiresAlert": true },
     { "code": "AS-DIS-001", "domain": "AS_DIS", "textAr": "شعرت بالجاهزية للخروج في نفس اليوم", "textEn": "I felt ready to be discharged the same day", "type": "likert5" },
     { "code": "AS-DIS-002", "domain": "AS_DIS", "textAr": "وضوح تعليمات الرعاية المنزلية بعد العملية", "textEn": "Clarity of at-home recovery instructions after the procedure", "type": "likert5" },
+    { "code": "AS-EMO-001", "domain": "AS_EMO", "textAr": "تم طمأنتي بخصوص العملية قبل دخولي لغرفة العمليات", "textEn": "I was reassured about the procedure before entering the operating room", "type": "likert5" },
+    { "code": "AS-FAM-001", "domain": "AS_FAM", "textAr": "تم إبقاء أسرتي على اطلاع أثناء فترة الجراحة", "textEn": "My family was kept informed during the procedure", "type": "likert5" },
+    { "code": "AS-COORD-001", "domain": "AS_COORD", "textAr": "شعرت أن فريق الجراحة والتخدير والتمريض كانوا منسّقين بشكل جيد", "textEn": "I felt the surgical, anesthesia, and nursing teams were well-coordinated", "type": "likert5" },
     { "code": "AS-OVR-001", "domain": "AS_OVR", "textAr": "التقييم العام لتجربة الجراحة النهارية", "textEn": "Overall rating of the ambulatory surgery experience", "type": "likert5" },
     { "code": "AS-OVR-002", "domain": "AS_OVR", "textAr": "ما مدى احتمالية أن توصي بهذه الخدمة؟ (0 إلى 10)", "textEn": "How likely are you to recommend this service? (0-10)", "type": "nps" },
 
@@ -116,6 +149,9 @@
     { "code": "BB-STF-001", "domain": "BB_STF", "textAr": "احترافية موظفي بنك الدم", "textEn": "Professionalism of blood bank staff", "type": "likert5" },
     { "code": "BB-COM-001", "domain": "BB_COM", "textAr": "وضوح شرح إجراءات الفحص والسلامة قبل البدء", "textEn": "Clarity of screening and safety procedure explanation before starting", "type": "likert5" },
     { "code": "BB-SAFE-001", "domain": "BB_SAFE", "textAr": "شعرت بالراحة والأمان أثناء الإجراء", "textEn": "I felt comfortable and safe during the procedure", "type": "likert5" },
+    { "code": "BB-EMO-001", "domain": "BB_EMO", "textAr": "شعرت بالراحة النفسية أثناء إجراء التبرع أو نقل الدم", "textEn": "I felt emotionally at ease during the donation/transfusion procedure", "type": "likert5" },
+    { "code": "BB-FAM-001", "domain": "BB_FAM", "textAr": "تم السماح لمرافقي بالبقاء معي أثناء الإجراء", "textEn": "My companion was allowed to stay with me during the procedure", "type": "likert5" },
+    { "code": "BB-COORD-001", "domain": "BB_COORD", "textAr": "شعرت أن الإجراء تم بتنسيق جيد بين الموظفين المختلفين", "textEn": "I felt the procedure was well-coordinated between different staff", "type": "likert5" },
     { "code": "BB-OVR-001", "domain": "BB_OVR", "textAr": "التقييم العام لتجربة بنك الدم", "textEn": "Overall rating of the blood bank experience", "type": "likert5" },
     { "code": "BB-OVR-002", "domain": "BB_OVR", "textAr": "ما مدى احتمالية أن توصي بهذه الخدمة؟ (0 إلى 10)", "textEn": "How likely are you to recommend this service? (0-10)", "type": "nps" }
   ]
