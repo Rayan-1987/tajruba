@@ -463,22 +463,325 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
   // Departments / question bank / templates (read-mostly reference data)
   // -------------------------------------------------------------------------
   router.get('/departments', (req: Request, res: Response) => {
+    const includeInactive = req.query.includeInactive === '1' && req.user!.role === 'SystemAdmin';
     const rows = db
-      .prepare('SELECT id, name_ar, name_en, service_type FROM departments WHERE tenant_id = ? AND active = 1 ORDER BY service_type')
+      .prepare(
+        `SELECT id, name_ar, name_en, service_type, active FROM departments
+         WHERE tenant_id = ? ${includeInactive ? '' : 'AND active = 1'} ORDER BY service_type`
+      )
       .all(req.user!.tenantId);
     res.json({ departments: rows });
   });
 
+  router.post('/departments', requireRole('SystemAdmin'), express.json({ limit: '8kb' }), (req: Request, res: Response) => {
+    const { nameAr, nameEn, serviceType } = req.body as { nameAr?: string; nameEn?: string; serviceType?: ServiceType };
+    if (!nameAr || !nameEn || !serviceType) {
+      res.status(400).json({ error: 'invalid_payload' });
+      return;
+    }
+    const facility = db.prepare('SELECT id FROM facilities WHERE tenant_id = ? LIMIT 1').get(req.user!.tenantId) as
+      | { id: string }
+      | undefined;
+    if (!facility) {
+      res.status(500).json({ error: 'no_facility' });
+      return;
+    }
+    const id = uid();
+    db.prepare('INSERT INTO departments (id, tenant_id, facility_id, name_ar, name_en, service_type) VALUES (?, ?, ?, ?, ?, ?)').run(
+      id,
+      req.user!.tenantId,
+      facility.id,
+      nameAr,
+      nameEn,
+      serviceType
+    );
+    logAudit(db, req.user!.tenantId, req.user!.id, 'department_created', 'department', id, { nameAr, serviceType });
+    res.status(201).json({ id });
+  });
+
+  router.patch('/departments/:id', requireRole('SystemAdmin'), express.json({ limit: '8kb' }), (req: Request, res: Response) => {
+    const existing = db.prepare('SELECT id FROM departments WHERE id = ? AND tenant_id = ?').get(req.params.id, req.user!.tenantId);
+    if (!existing) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    const { nameAr, nameEn, active } = req.body as { nameAr?: string; nameEn?: string; active?: boolean };
+    if (nameAr !== undefined) db.prepare('UPDATE departments SET name_ar = ? WHERE id = ?').run(nameAr, req.params.id);
+    if (nameEn !== undefined) db.prepare('UPDATE departments SET name_en = ? WHERE id = ?').run(nameEn, req.params.id);
+    if (active !== undefined) db.prepare('UPDATE departments SET active = ? WHERE id = ?').run(active ? 1 : 0, req.params.id);
+    logAudit(db, req.user!.tenantId, req.user!.id, 'department_updated', 'department', req.params.id, req.body);
+    res.json({ ok: true });
+  });
+
+  router.delete('/departments/:id', requireRole('SystemAdmin'), (req: Request, res: Response) => {
+    const existing = db.prepare('SELECT id FROM departments WHERE id = ? AND tenant_id = ?').get(req.params.id, req.user!.tenantId);
+    if (!existing) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    db.prepare('UPDATE departments SET active = 0 WHERE id = ?').run(req.params.id);
+    logAudit(db, req.user!.tenantId, req.user!.id, 'department_deactivated', 'department', req.params.id, null);
+    res.json({ ok: true });
+  });
+
   router.get('/question-bank', (req: Request, res: Response) => {
+    const includeInactive = req.query.includeInactive === '1' && req.user!.role === 'SystemAdmin';
     const domains = db
-      .prepare('SELECT id, code, name_ar, name_en, service_type, benchmark_top_box_percent FROM question_domains WHERE tenant_id = ? AND active = 1')
+      .prepare(
+        `SELECT id, code, name_ar, name_en, service_type, benchmark_top_box_percent, active FROM question_domains
+         WHERE tenant_id = ? ${includeInactive ? '' : 'AND active = 1'}`
+      )
       .all(req.user!.tenantId);
     const questions = db
       .prepare(
-        'SELECT id, code, domain_id, text_ar, text_en, answer_type, service_type, requires_alert FROM questions WHERE tenant_id = ? AND active = 1 ORDER BY sort_order'
+        `SELECT id, code, domain_id, text_ar, text_en, answer_type, service_type, requires_alert, active FROM questions
+         WHERE tenant_id = ? ${includeInactive ? '' : 'AND active = 1'} ORDER BY sort_order`
       )
       .all(req.user!.tenantId);
     res.json({ domains, questions });
+  });
+
+  router.post('/question-bank/domains', requireRole('SystemAdmin'), express.json({ limit: '8kb' }), (req: Request, res: Response) => {
+    const { code, nameAr, nameEn, serviceType, benchmarkTopBoxPercent } = req.body as {
+      code?: string;
+      nameAr?: string;
+      nameEn?: string;
+      serviceType?: ServiceType;
+      benchmarkTopBoxPercent?: number;
+    };
+    if (!code || !nameAr || !nameEn || !serviceType) {
+      res.status(400).json({ error: 'invalid_payload' });
+      return;
+    }
+    const id = uid();
+    try {
+      db.prepare(
+        'INSERT INTO question_domains (id, tenant_id, code, name_ar, name_en, service_type, benchmark_top_box_percent) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run(id, req.user!.tenantId, code, nameAr, nameEn, serviceType, benchmarkTopBoxPercent ?? 75.0);
+    } catch {
+      res.status(409).json({ error: 'code_already_exists' });
+      return;
+    }
+    logAudit(db, req.user!.tenantId, req.user!.id, 'domain_created', 'question_domain', id, { code });
+    res.status(201).json({ id });
+  });
+
+  router.patch(
+    '/question-bank/domains/:id',
+    requireRole('SystemAdmin'),
+    express.json({ limit: '8kb' }),
+    (req: Request, res: Response) => {
+      const existing = db.prepare('SELECT id FROM question_domains WHERE id = ? AND tenant_id = ?').get(req.params.id, req.user!.tenantId);
+      if (!existing) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      const { nameAr, nameEn, benchmarkTopBoxPercent, active } = req.body as {
+        nameAr?: string;
+        nameEn?: string;
+        benchmarkTopBoxPercent?: number;
+        active?: boolean;
+      };
+      if (nameAr !== undefined) db.prepare('UPDATE question_domains SET name_ar = ? WHERE id = ?').run(nameAr, req.params.id);
+      if (nameEn !== undefined) db.prepare('UPDATE question_domains SET name_en = ? WHERE id = ?').run(nameEn, req.params.id);
+      if (benchmarkTopBoxPercent !== undefined)
+        db.prepare('UPDATE question_domains SET benchmark_top_box_percent = ? WHERE id = ?').run(benchmarkTopBoxPercent, req.params.id);
+      if (active !== undefined) db.prepare('UPDATE question_domains SET active = ? WHERE id = ?').run(active ? 1 : 0, req.params.id);
+      logAudit(db, req.user!.tenantId, req.user!.id, 'domain_updated', 'question_domain', req.params.id, req.body);
+      res.json({ ok: true });
+    }
+  );
+
+  router.post('/question-bank/questions', requireRole('SystemAdmin'), express.json({ limit: '8kb' }), (req: Request, res: Response) => {
+    const { code, domainId, textAr, textEn, type, requiresAlert, dependsOnCode } = req.body as {
+      code?: string;
+      domainId?: string;
+      textAr?: string;
+      textEn?: string;
+      type?: AnswerType;
+      requiresAlert?: boolean;
+      dependsOnCode?: string;
+    };
+    if (!code || !domainId || !textAr || !textEn || !type) {
+      res.status(400).json({ error: 'invalid_payload' });
+      return;
+    }
+    const domain = db.prepare('SELECT id, service_type FROM question_domains WHERE id = ? AND tenant_id = ?').get(domainId, req.user!.tenantId) as
+      | { id: string; service_type: ServiceType }
+      | undefined;
+    if (!domain) {
+      res.status(404).json({ error: 'domain_not_found' });
+      return;
+    }
+    const template = db
+      .prepare('SELECT id FROM survey_templates WHERE tenant_id = ? AND service_type = ?')
+      .get(req.user!.tenantId, domain.service_type) as { id: string } | undefined;
+
+    const id = uid();
+    const nextSortOrder = (
+      db.prepare('SELECT COALESCE(MAX(sort_order), -1) + 1 as n FROM questions WHERE tenant_id = ?').get(req.user!.tenantId) as { n: number }
+    ).n;
+    try {
+      db.prepare(
+        `INSERT INTO questions
+         (id, tenant_id, code, domain_id, text_ar, text_en, answer_type, service_type, requires_alert, sort_order, depends_on_code)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(id, req.user!.tenantId, code, domainId, textAr, textEn, type, domain.service_type, requiresAlert ? 1 : 0, nextSortOrder, dependsOnCode ?? null);
+    } catch {
+      res.status(409).json({ error: 'code_already_exists' });
+      return;
+    }
+    if (template) {
+      const nextTemplateSortOrder = (
+        db.prepare('SELECT COALESCE(MAX(sort_order), -1) + 1 as n FROM template_questions WHERE template_id = ?').get(template.id) as {
+          n: number;
+        }
+      ).n;
+      db.prepare('INSERT INTO template_questions (id, template_id, question_id, sort_order) VALUES (?, ?, ?, ?)').run(
+        uid(),
+        template.id,
+        id,
+        nextTemplateSortOrder
+      );
+    }
+    logAudit(db, req.user!.tenantId, req.user!.id, 'question_created', 'question', id, { code });
+    res.status(201).json({ id });
+  });
+
+  router.patch(
+    '/question-bank/questions/:id',
+    requireRole('SystemAdmin'),
+    express.json({ limit: '8kb' }),
+    (req: Request, res: Response) => {
+      const existing = db.prepare('SELECT id FROM questions WHERE id = ? AND tenant_id = ?').get(req.params.id, req.user!.tenantId);
+      if (!existing) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      const { textAr, textEn, requiresAlert, active } = req.body as {
+        textAr?: string;
+        textEn?: string;
+        requiresAlert?: boolean;
+        active?: boolean;
+      };
+      if (textAr !== undefined) db.prepare('UPDATE questions SET text_ar = ? WHERE id = ?').run(textAr, req.params.id);
+      if (textEn !== undefined) db.prepare('UPDATE questions SET text_en = ? WHERE id = ?').run(textEn, req.params.id);
+      if (requiresAlert !== undefined) db.prepare('UPDATE questions SET requires_alert = ? WHERE id = ?').run(requiresAlert ? 1 : 0, req.params.id);
+      if (active !== undefined) db.prepare('UPDATE questions SET active = ? WHERE id = ?').run(active ? 1 : 0, req.params.id);
+      logAudit(db, req.user!.tenantId, req.user!.id, 'question_updated', 'question', req.params.id, req.body);
+      res.json({ ok: true });
+    }
+  );
+
+  // -------------------------------------------------------------------------
+  // Users
+  // -------------------------------------------------------------------------
+  const VALID_ROLES: Role[] = ['SystemAdmin', 'QualityManager', 'DepartmentManager', 'ExecutiveViewer'];
+
+  router.get('/users', requireRole('SystemAdmin'), (req: Request, res: Response) => {
+    const rows = db
+      .prepare(
+        `SELECT id, email, role, department_id, full_name, active FROM users WHERE tenant_id = ? ORDER BY full_name`
+      )
+      .all(req.user!.tenantId);
+    res.json({ users: rows });
+  });
+
+  router.post('/users', requireRole('SystemAdmin'), express.json({ limit: '8kb' }), (req: Request, res: Response) => {
+    const { email, password, role, departmentId, fullName } = req.body as {
+      email?: string;
+      password?: string;
+      role?: Role;
+      departmentId?: string | null;
+      fullName?: string;
+    };
+    if (!email || !password || !role || !fullName || !VALID_ROLES.includes(role)) {
+      res.status(400).json({ error: 'invalid_payload' });
+      return;
+    }
+    if (password.length < 8) {
+      res.status(400).json({ error: 'password_too_short' });
+      return;
+    }
+    if (role === 'DepartmentManager' && !departmentId) {
+      res.status(400).json({ error: 'department_required_for_department_manager' });
+      return;
+    }
+    const id = uid();
+    try {
+      db.prepare('INSERT INTO users (id, tenant_id, email, password_hash, role, department_id, full_name) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+        id,
+        req.user!.tenantId,
+        email.toLowerCase().trim(),
+        hashPassword(password),
+        role,
+        role === 'DepartmentManager' ? (departmentId ?? null) : null,
+        fullName
+      );
+    } catch {
+      res.status(409).json({ error: 'email_already_used' });
+      return;
+    }
+    logAudit(db, req.user!.tenantId, req.user!.id, 'user_created', 'user', id, { email, role });
+    res.status(201).json({ id });
+  });
+
+  router.patch('/users/:id', requireRole('SystemAdmin'), express.json({ limit: '8kb' }), (req: Request, res: Response) => {
+    const existing = db.prepare('SELECT id FROM users WHERE id = ? AND tenant_id = ?').get(req.params.id, req.user!.tenantId);
+    if (!existing) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    const { role, departmentId, fullName, active, password } = req.body as {
+      role?: Role;
+      departmentId?: string | null;
+      fullName?: string;
+      active?: boolean;
+      password?: string;
+    };
+    if (active === false && req.params.id === req.user!.id) {
+      res.status(400).json({ error: 'cannot_deactivate_self' });
+      return;
+    }
+    if (role !== undefined) {
+      if (!VALID_ROLES.includes(role)) {
+        res.status(400).json({ error: 'invalid_role' });
+        return;
+      }
+      db.prepare('UPDATE users SET role = ?, department_id = ? WHERE id = ?').run(
+        role,
+        role === 'DepartmentManager' ? (departmentId ?? null) : null,
+        req.params.id
+      );
+    } else if (departmentId !== undefined) {
+      db.prepare('UPDATE users SET department_id = ? WHERE id = ?').run(departmentId, req.params.id);
+    }
+    if (fullName !== undefined) db.prepare('UPDATE users SET full_name = ? WHERE id = ?').run(fullName, req.params.id);
+    if (active !== undefined) db.prepare('UPDATE users SET active = ? WHERE id = ?').run(active ? 1 : 0, req.params.id);
+    if (password) {
+      if (password.length < 8) {
+        res.status(400).json({ error: 'password_too_short' });
+        return;
+      }
+      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(password), req.params.id);
+    }
+    logAudit(db, req.user!.tenantId, req.user!.id, 'user_updated', 'user', req.params.id, { role, active, fullNameChanged: fullName !== undefined });
+    res.json({ ok: true });
+  });
+
+  router.delete('/users/:id', requireRole('SystemAdmin'), (req: Request, res: Response) => {
+    if (req.params.id === req.user!.id) {
+      res.status(400).json({ error: 'cannot_deactivate_self' });
+      return;
+    }
+    const existing = db.prepare('SELECT id FROM users WHERE id = ? AND tenant_id = ?').get(req.params.id, req.user!.tenantId);
+    if (!existing) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    db.prepare('UPDATE users SET active = 0 WHERE id = ?').run(req.params.id);
+    logAudit(db, req.user!.tenantId, req.user!.id, 'user_deactivated', 'user', req.params.id, null);
+    res.json({ ok: true });
   });
 
   router.get('/templates', (req: Request, res: Response) => {
@@ -491,7 +794,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         .prepare(
           `SELECT q.id, q.code, q.text_ar, q.text_en, q.answer_type, q.depends_on_code
            FROM template_questions tq JOIN questions q ON q.id = tq.question_id
-           WHERE tq.template_id = ? ORDER BY tq.sort_order`
+           WHERE tq.template_id = ? AND q.active = 1 ORDER BY tq.sort_order`
         )
         .all(t.id)
     }));
@@ -527,7 +830,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
 
     const results = domains.map((domain) => {
       const questions = db
-        .prepare('SELECT id, code, text_ar, text_en, answer_type FROM questions WHERE domain_id = ? ORDER BY sort_order')
+        .prepare('SELECT id, code, text_ar, text_en, answer_type FROM questions WHERE domain_id = ? AND active = 1 ORDER BY sort_order')
         .all(domain.id) as { id: string; code: string; text_ar: string; text_en: string; answer_type: AnswerType }[];
 
       const questionScores = questions.map((q) => {

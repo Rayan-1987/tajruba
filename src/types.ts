@@ -58,4 +58,12 @@ export interface Department {
   name_ar: string;
   name_en: string;
   service_type: ServiceType;
+  active?: number;
 }
+
+export const ROLE_LABELS_AR: Record<Role, string> = {
+  SystemAdmin: 'مدير النظام',
+  QualityManager: 'مدير الجودة',
+  DepartmentManager: 'مدير قسم',
+  ExecutiveViewer: 'مسؤول تنفيذي'
+};

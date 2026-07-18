@@ -1,13 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
-import type { Role } from '../types';
-
-const ROLE_LABELS_AR: Record<Role, string> = {
-  SystemAdmin: 'مدير النظام',
-  QualityManager: 'مدير الجودة',
-  DepartmentManager: 'مدير قسم',
-  ExecutiveViewer: 'مسؤول تنفيذي'
-};
+import { ROLE_LABELS_AR, type Role } from '../types';
 
 const NAV_ITEMS: { to: string; label: string; roles?: Role[] }[] = [
   { to: '/dashboard/reports', label: 'التقارير (PREMs)' },
@@ -17,6 +10,7 @@ const NAV_ITEMS: { to: string; label: string; roles?: Role[] }[] = [
   { to: '/dashboard/phone-survey', label: 'استبيان هاتفي' },
   { to: '/dashboard/survey-studio', label: 'استوديو الاستبيانات', roles: ['SystemAdmin', 'QualityManager'] },
   { to: '/dashboard/data-center', label: 'مركز البيانات', roles: ['SystemAdmin', 'QualityManager'] },
+  { to: '/dashboard/admin', label: 'الإدارة', roles: ['SystemAdmin'] },
   { to: '/dashboard/settings', label: 'الإعدادات', roles: ['SystemAdmin'] }
 ];
 

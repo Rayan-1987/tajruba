@@ -12,6 +12,7 @@ import SurveyStudio from './pages/SurveyStudio';
 import PhoneSurvey from './pages/PhoneSurvey';
 import DataCenter from './pages/DataCenter';
 import Settings from './pages/Settings';
+import Admin from './pages/Admin';
 
 function ProtectedRoutes({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -48,6 +49,7 @@ export default function App() {
         <Route path="phone-survey" element={<PhoneSurvey />} />
         <Route path="survey-studio" element={<SurveyStudio />} />
         <Route path="data-center" element={<DataCenter />} />
+        <Route path="admin" element={<Admin />} />
         <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
