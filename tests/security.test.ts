@@ -14,7 +14,7 @@ function startServer() {
   const db = openDatabase(':memory:');
   seedDatabase(db, root);
   const app = express();
-  app.use('/api', createApi(db, 'test-secret-at-least-32-characters-long'));
+  app.use('/api', createApi(db, 'test-secret-at-least-32-characters-long', root));
   return new Promise<{ server: Server; baseUrl: string; db: typeof db }>((resolve) => {
     const server = app.listen(0, () => {
       const address = server.address();

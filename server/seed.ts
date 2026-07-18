@@ -5,6 +5,7 @@ import type { Db } from './db.ts';
 import { hashPassword } from './auth.ts';
 import { redactPii, createDefaultAnalyzer, shouldAlert } from './comments.ts';
 import { scoreInstrument, VAS_PAIN, type InstrumentItemValue } from './scoring.ts';
+import { provisionTenantDefaults } from './provisioning.ts';
 import type { AnswerType, ServiceType } from './types.ts';
 
 interface DomainSeed {
@@ -101,18 +102,6 @@ export function seedDatabase(db: Db, root: string): void {
   const insertUser = db.prepare(
     'INSERT INTO users (id, tenant_id, email, password_hash, role, department_id, full_name) VALUES (?, ?, ?, ?, ?, ?, ?)'
   );
-  const insertDomain = db.prepare(
-    'INSERT INTO question_domains (id, code, name_ar, name_en, service_type, benchmark_mean) VALUES (?, ?, ?, ?, ?, ?)'
-  );
-  const insertQuestion = db.prepare(
-    'INSERT INTO questions (id, code, domain_id, text_ar, text_en, answer_type, service_type, requires_alert, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  );
-  const insertTemplate = db.prepare(
-    'INSERT INTO survey_templates (id, tenant_id, name_ar, name_en, service_type) VALUES (?, ?, ?, ?, ?)'
-  );
-  const insertTemplateQuestion = db.prepare(
-    'INSERT INTO template_questions (id, template_id, question_id, sort_order) VALUES (?, ?, ?, ?)'
-  );
   const insertInvitation = db.prepare(
     `INSERT INTO survey_invitations
      (id, tenant_id, template_id, department_id, service_type, token_hash, patient_phone_hash, channel, status, expires_at, sent_at, created_at)
@@ -140,20 +129,6 @@ export function seedDatabase(db: Db, root: string): void {
   );
   const insertAudit = db.prepare(
     'INSERT INTO audit_logs (id, tenant_id, user_id, action, entity, entity_id, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  );
-  const insertInstrument = db.prepare(
-    'INSERT INTO proms_instruments (id, code, name_ar, name_en, license_status, description_ar) VALUES (?, ?, ?, ?, ?, ?)'
-  );
-  const insertInstrumentItem = db.prepare(
-    'INSERT INTO proms_instrument_items (id, instrument_id, code, text_ar, text_en, reverse_scored, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  );
-  const insertPathway = db.prepare(
-    'INSERT INTO care_pathways (id, tenant_id, code, name_ar, name_en) VALUES (?, ?, ?, ?, ?)'
-  );
-  const insertTimepoint = db.prepare(
-    `INSERT INTO pathway_timepoints
-     (id, pathway_id, code, name_ar, offset_days, window_days, instrument_ids_json, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   );
   const insertEpisode = db.prepare(
     `INSERT INTO patient_episodes
@@ -208,59 +183,12 @@ export function seedDatabase(db: Db, root: string): void {
   const execId = uid();
   insertUser.run(execId, tenantId, 'executive@tajruba.sa', hashPassword(DEMO_PASSWORDS.executive), 'ExecutiveViewer', null, 'مسؤول تنفيذي');
 
-  // --- Question bank -----------------------------------------------------
-  const domainIds: Record<string, string> = {};
-  for (const domain of bank.domains) {
-    const id = uid();
-    domainIds[domain.code] = id;
-    insertDomain.run(id, domain.code, domain.nameAr, domain.nameEn, domain.service, domain.benchmark);
-  }
-
-  const questionIds: Record<string, string> = {};
-  const questionMeta: Record<string, QuestionSeed> = {};
-  bank.questions.forEach((question, index) => {
-    const id = uid();
-    questionIds[question.code] = id;
-    questionMeta[id] = question;
-    insertQuestion.run(
-      id,
-      question.code,
-      domainIds[question.domain],
-      question.textAr,
-      question.textEn,
-      question.type,
-      bank.domains.find((d) => d.code === question.domain)!.service,
-      question.requiresAlert ? 1 : 0,
-      index
-    );
-  });
-
-  // --- Templates (one per service type) -----------------------------------
-  const templateIds: Record<ServiceType, string> = {} as Record<ServiceType, string>;
-  const templateNames: Record<ServiceType, { ar: string; en: string }> = {
-    ED: { ar: 'استبيان تجربة الطوارئ', en: 'Emergency Experience Survey' },
-    IP: { ar: 'استبيان تجربة التنويم', en: 'Inpatient Experience Survey' },
-    OP: { ar: 'استبيان العيادات الخارجية', en: 'Outpatient Experience Survey' },
-    HH: { ar: 'استبيان الرعاية المنزلية', en: 'Home Health Experience Survey' },
-    LAB: { ar: 'استبيان تجربة المختبر', en: 'Laboratory Experience Survey' },
-    RAD: { ar: 'استبيان تجربة الأشعة', en: 'Radiology Experience Survey' },
-    PHARM: { ar: 'استبيان تجربة الصيدلية', en: 'Pharmacy Experience Survey' }
-  };
-  for (const service of Object.keys(templateNames) as ServiceType[]) {
-    const id = uid();
-    templateIds[service] = id;
-    insertTemplate.run(id, tenantId, templateNames[service].ar, templateNames[service].en, service);
-    const questionsForService = bank.questions.filter(
-      (q) => bank.domains.find((d) => d.code === q.domain)!.service === service
-    );
-    questionsForService.forEach((q, index) => {
-      insertTemplateQuestion.run(uid(), id, questionIds[q.code], index);
-    });
-  }
+  // --- Question bank, templates, PROMs catalog, care pathways (per-tenant copy) ---
+  const { templateIds, questionIds, instrumentIds, pathwayIds } = provisionTenantDefaults(db, root, tenantId);
 
   // --- Demo responses across the last 6 months per department ------------
   let commentIndex = 0;
-  for (const service of Object.keys(templateNames) as ServiceType[]) {
+  for (const service of Object.keys(serviceDeptNames) as ServiceType[]) {
     const deptId = departmentIds[service];
     const templateId = templateIds[service];
     const questionsForService = bank.questions.filter(
@@ -353,132 +281,63 @@ export function seedDatabase(db: Db, root: string): void {
     );
   }
 
-  // --- PROMs instruments ---------------------------------------------------
-  const phq9Id = uid();
-  insertInstrument.run(phq9Id, 'PHQ9', 'مقياس صحة المريض للاكتئاب (PHQ-9)', 'Patient Health Questionnaire-9', 'free', 'أداة فحص فرز للاكتئاب، متاحة للاستخدام العام دون رسوم ترخيص.');
-  const phq9Items = [
-    'قلة الاهتمام أو المتعة في القيام بالأشياء',
-    'الشعور بالإحباط أو الاكتئاب أو اليأس',
-    'صعوبة في النوم أو النوم لفترة طويلة جدًا',
-    'الشعور بالتعب أو قلة الطاقة',
-    'ضعف الشهية أو الإفراط في الأكل',
-    'الشعور السلبي تجاه النفس',
-    'صعوبة التركيز',
-    'بطء أو تسارع ملحوظ في الحركة أو الكلام',
-    'أفكار بإيذاء النفس'
-  ];
-  phq9Items.forEach((text, i) => {
-    insertInstrumentItem.run(uid(), phq9Id, `PHQ9-${i + 1}`, text, `PHQ-9 item ${i + 1}`, 0, i);
-  });
+  // --- PROMs care pathways: generate demo episodes with real VAS pain scores ---
+  const vasId = instrumentIds.VAS_PAIN;
 
-  const gad7Id = uid();
-  insertInstrument.run(gad7Id, 'GAD7', 'مقياس اضطراب القلق العام (GAD-7)', 'Generalized Anxiety Disorder-7', 'free', 'أداة فحص فرز للقلق العام، متاحة للاستخدام العام دون رسوم ترخيص.');
-  const gad7Items = [
-    'الشعور بالعصبية أو القلق',
-    'عدم القدرة على إيقاف القلق أو التحكم به',
-    'القلق الزائد حول أمور مختلفة',
-    'صعوبة الاسترخاء',
-    'التململ لدرجة صعوبة الجلوس بهدوء',
-    'سهولة الانزعاج أو التهيج',
-    'الشعور بالخوف من حدوث شيء فظيع'
-  ];
-  gad7Items.forEach((text, i) => {
-    insertInstrumentItem.run(uid(), gad7Id, `GAD7-${i + 1}`, text, `GAD-7 item ${i + 1}`, 0, i);
-  });
+  function generatePathwayEpisodes(pathwayCode: string, departmentId: string, episodeCount: number, surgeonPrefix: string) {
+    const pathwayId = pathwayIds[pathwayCode];
+    const timepoints = db
+      .prepare('SELECT id, code, offset_days FROM pathway_timepoints WHERE pathway_id = ? ORDER BY sort_order')
+      .all(pathwayId) as { id: string; code: string; offset_days: number }[];
 
-  const vasId = uid();
-  insertInstrument.run(vasId, 'VAS_PAIN', 'مقياس الألم البصري التناظري (VAS)', 'Visual Analogue Scale - Pain', 'free', 'مقياس ألم من بند واحد، حر الاستخدام.');
-  insertInstrumentItem.run(uid(), vasId, 'VAS-1', 'قيّم شدة الألم الذي تشعر به الآن من 0 (لا يوجد ألم) إلى 10 (أسوأ ألم يمكن تخيله)', 'Rate your current pain from 0 (no pain) to 10 (worst pain imaginable)', 0, 0);
-
-  const oxfordId = uid();
-  insertInstrument.run(
-    oxfordId,
-    'OXFORD_KNEE',
-    'مقياس أكسفورد للركبة (Oxford Knee Score)',
-    'Oxford Knee Score',
-    'licensed_required',
-    'أداة مرخّصة من جامعة أكسفورد. البنود الفعلية محجوبة حتى يتم توثيق الترخيص التجاري والنسخة العربية المعتمدة.'
-  );
-  for (let i = 1; i <= 12; i++) {
-    insertInstrumentItem.run(uid(), oxfordId, `OKS-${i}`, `بند مرخّص #${i} — يتطلب ترخيصًا تجاريًا لعرض النص الفعلي`, `Licensed item #${i} — commercial license required to display actual text`, 0, i - 1);
-  }
-
-  const eq5dId = uid();
-  insertInstrument.run(
-    eq5dId,
-    'EQ5D5L',
-    'مقياس جودة الحياة (EQ-5D-5L)',
-    'EuroQol EQ-5D-5L',
-    'licensed_required',
-    'أداة مرخّصة من EuroQol Group. البنود الفعلية محجوبة حتى يتم توثيق الترخيص.'
-  );
-  for (let i = 1; i <= 5; i++) {
-    insertInstrumentItem.run(uid(), eq5dId, `EQ5D-${i}`, `بُعد مرخّص #${i} — يتطلب ترخيصًا لعرض النص الفعلي`, `Licensed dimension #${i} — license required to display actual text`, 0, i - 1);
-  }
-
-  // --- Care pathway: knee replacement, tracked with the free VAS pain scale ---
-  const pathwayId = uid();
-  insertPathway.run(pathwayId, tenantId, 'KNEE_REPLACEMENT', 'مسار استبدال مفصل الركبة', 'Knee Replacement Pathway');
-
-  const timepointDefs = [
-    { code: 'BASELINE', nameAr: 'ما قبل العملية', offset: 0 },
-    { code: 'W6', nameAr: '6 أسابيع', offset: 42 },
-    { code: 'M3', nameAr: '3 أشهر', offset: 90 },
-    { code: 'M6', nameAr: '6 أشهر', offset: 180 },
-    { code: 'M12', nameAr: '12 شهر', offset: 365 }
-  ];
-  const timepointIds: string[] = [];
-  timepointDefs.forEach((tp, index) => {
-    const id = uid();
-    timepointIds.push(id);
-    insertTimepoint.run(id, pathwayId, tp.code, tp.nameAr, tp.offset, 14, JSON.stringify([vasId]), index);
-  });
-
-  const episodeCount = 10;
-  for (let e = 0; e < episodeCount; e++) {
-    const startAgeDays = 30 + Math.round(rng() * 335);
-    const startDate = daysAgo(startAgeDays);
-    const episodeId = uid();
-    insertEpisode.run(
-      episodeId,
-      tenantId,
-      pathwayId,
-      departmentIds.IP,
-      sha256(`patient-${e}-${rng()}`),
-      `د. جراح ${(e % 3) + 1}`,
-      startDate,
-      startAgeDays > 365 ? 'completed' : 'active'
-    );
-
-    const baselinePain = 7 + Math.round(rng() * 2); // 7-9
-    let baselineRaw: number | null = null;
-    const improvementRate = 0.5 + rng() * 1.2; // pain points recovered per elapsed timepoint
-
-    timepointDefs.forEach((tp, tIndex) => {
-      const dueDate = addDays(startDate, tp.offset);
-      const isDue = new Date(dueDate).getTime() <= Date.now();
-      const assignmentId = uid();
-      insertAssignment.run(assignmentId, episodeId, timepointIds[tIndex], vasId, dueDate, isDue ? 'completed' : 'scheduled');
-
-      if (!isDue) return;
-
-      const painNow = tIndex === 0 ? baselinePain : clamp(baselinePain - improvementRate * tIndex, 0, 10);
-      const items: InstrumentItemValue[] = [{ code: 'VAS-1', value: Math.round(painNow), reverseScored: false, scaleMax: 10 }];
-      const result = scoreInstrument(VAS_PAIN, items, tIndex === 0 ? null : baselineRaw);
-      if (tIndex === 0) baselineRaw = result.raw;
-
-      insertScore.run(
-        uid(),
-        assignmentId,
-        vasId,
-        result.raw,
-        result.band,
-        result.baseline,
-        result.delta,
-        result.mcidMet === null ? null : result.mcidMet ? 1 : 0
+    for (let e = 0; e < episodeCount; e++) {
+      const startAgeDays = 30 + Math.round(rng() * 335);
+      const startDate = daysAgo(startAgeDays);
+      const episodeId = uid();
+      insertEpisode.run(
+        episodeId,
+        tenantId,
+        pathwayId,
+        departmentId,
+        sha256(`${pathwayCode}-patient-${e}-${rng()}`),
+        `${surgeonPrefix} ${(e % 3) + 1}`,
+        startDate,
+        startAgeDays > 365 ? 'completed' : 'active'
       );
-    });
+
+      const baselinePain = 6 + Math.round(rng() * 3); // 6-9
+      let baselineRaw: number | null = null;
+      const improvementRate = 0.5 + rng() * 1.2;
+
+      timepoints.forEach((tp, tIndex) => {
+        const dueDate = addDays(startDate, tp.offset_days);
+        const isDue = new Date(dueDate).getTime() <= Date.now();
+        const assignmentId = uid();
+        insertAssignment.run(assignmentId, episodeId, tp.id, vasId, dueDate, isDue ? 'completed' : 'scheduled');
+
+        if (!isDue) return;
+
+        const painNow = tIndex === 0 ? baselinePain : clamp(baselinePain - improvementRate * tIndex, 0, 10);
+        const items: InstrumentItemValue[] = [{ code: 'VAS-1', value: Math.round(painNow), reverseScored: false, scaleMax: 10 }];
+        const result = scoreInstrument(VAS_PAIN, items, tIndex === 0 ? null : baselineRaw);
+        if (tIndex === 0) baselineRaw = result.raw;
+
+        insertScore.run(
+          uid(),
+          assignmentId,
+          vasId,
+          result.raw,
+          result.band,
+          result.baseline,
+          result.delta,
+          result.mcidMet === null ? null : result.mcidMet ? 1 : 0
+        );
+      });
+    }
   }
+
+  generatePathwayEpisodes('KNEE_REPLACEMENT', departmentIds.IP, 10, 'د. جراح عظام');
+  generatePathwayEpisodes('LOW_BACK_PAIN', departmentIds.OP, 6, 'د. استشاري ظهر');
 
   // --- Audit trail sample ---------------------------------------------------
   insertAudit.run(uid(), tenantId, adminId, 'seed_completed', 'system', null, JSON.stringify({ note: 'Demo data generated' }));

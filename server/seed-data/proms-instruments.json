@@ -1,0 +1,147 @@
+[
+  {
+    "code": "PHQ9",
+    "nameAr": "مقياس صحة المريض للاكتئاب (PHQ-9)",
+    "nameEn": "Patient Health Questionnaire-9",
+    "licenseStatus": "free",
+    "descriptionAr": "أداة فحص فرز للاكتئاب، متاحة للاستخدام العام دون رسوم ترخيص (Public Domain).",
+    "items": [
+      { "code": "PHQ9-1", "textAr": "قلة الاهتمام أو المتعة في القيام بالأشياء", "textEn": "Little interest or pleasure in doing things", "reverseScored": false, "scaleMax": 3 },
+      { "code": "PHQ9-2", "textAr": "الشعور بالحزن أو الاكتئاب أو اليأس", "textEn": "Feeling down, depressed, or hopeless", "reverseScored": false, "scaleMax": 3 },
+      { "code": "PHQ9-3", "textAr": "صعوبة في النوم أو الاستمرار فيه، أو النوم أكثر من اللازم", "textEn": "Trouble falling or staying asleep, or sleeping too much", "reverseScored": false, "scaleMax": 3 },
+      { "code": "PHQ9-4", "textAr": "الشعور بالتعب أو قلة الطاقة", "textEn": "Feeling tired or having little energy", "reverseScored": false, "scaleMax": 3 },
+      { "code": "PHQ9-5", "textAr": "ضعف الشهية أو الإفراط في الأكل", "textEn": "Poor appetite or overeating", "reverseScored": false, "scaleMax": 3 },
+      { "code": "PHQ9-6", "textAr": "الشعور بالسوء تجاه نفسك أو أنك فاشل أو خذلت نفسك أو عائلتك", "textEn": "Feeling bad about yourself", "reverseScored": false, "scaleMax": 3 },
+      { "code": "PHQ9-7", "textAr": "صعوبة التركيز على الأشياء مثل القراءة أو مشاهدة التلفاز", "textEn": "Trouble concentrating on things", "reverseScored": false, "scaleMax": 3 },
+      { "code": "PHQ9-8", "textAr": "التحرك أو الكلام ببطء ملحوظ، أو العكس: التململ وعدم الاستقرار", "textEn": "Moving or speaking slowly / being fidgety or restless", "reverseScored": false, "scaleMax": 3 },
+      { "code": "PHQ9-9", "textAr": "أفكار بأنك أفضل حالًا لو كنت ميتًا أو بإيذاء نفسك", "textEn": "Thoughts that you would be better off dead or of hurting yourself", "reverseScored": false, "scaleMax": 3 }
+    ]
+  },
+  {
+    "code": "GAD7",
+    "nameAr": "مقياس اضطراب القلق العام (GAD-7)",
+    "nameEn": "Generalized Anxiety Disorder-7",
+    "licenseStatus": "free",
+    "descriptionAr": "أداة فحص فرز للقلق العام، متاحة للاستخدام العام دون رسوم ترخيص (Public Domain).",
+    "items": [
+      { "code": "GAD7-1", "textAr": "الشعور بالعصبية أو القلق أو التوتر", "textEn": "Feeling nervous, anxious, or on edge", "reverseScored": false, "scaleMax": 3 },
+      { "code": "GAD7-2", "textAr": "عدم القدرة على إيقاف القلق أو التحكم فيه", "textEn": "Not being able to stop or control worrying", "reverseScored": false, "scaleMax": 3 },
+      { "code": "GAD7-3", "textAr": "القلق المفرط بشأن أمور مختلفة", "textEn": "Worrying too much about different things", "reverseScored": false, "scaleMax": 3 },
+      { "code": "GAD7-4", "textAr": "صعوبة في الاسترخاء", "textEn": "Trouble relaxing", "reverseScored": false, "scaleMax": 3 },
+      { "code": "GAD7-5", "textAr": "التململ لدرجة يصعب معها الجلوس بهدوء", "textEn": "Being so restless that it is hard to sit still", "reverseScored": false, "scaleMax": 3 },
+      { "code": "GAD7-6", "textAr": "سرعة الانزعاج أو الاستثارة", "textEn": "Becoming easily annoyed or irritable", "reverseScored": false, "scaleMax": 3 },
+      { "code": "GAD7-7", "textAr": "الشعور بالخوف كأن شيئًا فظيعًا قد يحدث", "textEn": "Feeling afraid as if something awful might happen", "reverseScored": false, "scaleMax": 3 }
+    ]
+  },
+  {
+    "code": "VAS_PAIN",
+    "nameAr": "مقياس الألم البصري التناظري (VAS)",
+    "nameEn": "Visual Analogue Scale - Pain",
+    "licenseStatus": "free",
+    "descriptionAr": "مقياس ألم من بند واحد، حر الاستخدام بالكامل.",
+    "items": [
+      { "code": "VAS-1", "textAr": "قيّم شدة الألم الذي تشعر به الآن من 0 (لا يوجد ألم) إلى 10 (أسوأ ألم يمكن تخيله)", "textEn": "Rate your current pain from 0 (no pain) to 10 (worst pain imaginable)", "reverseScored": false, "scaleMax": 10 }
+    ]
+  },
+  {
+    "code": "PROMIS_GH10",
+    "nameAr": "مقياس الصحة العامة PROMIS (Global Health-10)",
+    "nameEn": "PROMIS Global Health-10",
+    "licenseStatus": "free",
+    "descriptionAr": "أداة عامة لقياس جودة الحياة المرتبطة بالصحة، اعتمدتها وزارة الصحة السعودية في مسح وطني عبر منصة صحتي. البنود عامة المجال (Public Domain) عبر HealthMeasures/NIH. ملاحظة: الدرجة المعروضة هنا مجموع خام للبعدين الجسدي والنفسي وليست T-Score الرسمية — التحويل الرسمي لـ T-Score يتطلب جداول HealthMeasures المعتمدة قبل أي استخدام سريري أو بحثي.",
+    "items": [
+      { "code": "GH-1", "textAr": "بشكل عام، كيف تقيّم صحتك؟ (ممتازة=4 ... سيئة=0)", "textEn": "In general, would you say your health is:", "reverseScored": false, "scaleMax": 4 },
+      { "code": "GH-2", "textAr": "بشكل عام، كيف تقيّم جودة حياتك؟", "textEn": "In general, would you say your quality of life is:", "reverseScored": false, "scaleMax": 4 },
+      { "code": "GH-3", "textAr": "كيف تقيّم صحتك الجسدية بشكل عام؟", "textEn": "In general, how would you rate your physical health?", "reverseScored": false, "scaleMax": 4 },
+      { "code": "GH-4", "textAr": "كيف تقيّم صحتك النفسية، بما في ذلك مزاجك وقدرتك على التفكير؟", "textEn": "In general, how would you rate your mental health?", "reverseScored": false, "scaleMax": 4 },
+      { "code": "GH-5", "textAr": "كيف تقيّم رضاك عن أنشطتك وعلاقاتك الاجتماعية؟", "textEn": "How would you rate your satisfaction with social activities and relationships?", "reverseScored": false, "scaleMax": 4 },
+      { "code": "GH-6", "textAr": "قيّم مدى قدرتك على أداء أدوارك ونشاطاتك الاجتماعية المعتادة", "textEn": "Rate how well you carry out your usual social activities and roles", "reverseScored": false, "scaleMax": 4 },
+      { "code": "GH-7", "textAr": "إلى أي مدى تقدر تمارس أنشطتك البدنية اليومية (المشي، صعود الدرج، حمل الأغراض)؟", "textEn": "To what extent are you able to carry out your everyday physical activities?", "reverseScored": false, "scaleMax": 4 },
+      { "code": "GH-8", "textAr": "خلال آخر 7 أيام، قيّم شدة الألم لديك في المتوسط (0 لا يوجد ألم - 10 أسوأ ألم)", "textEn": "In the past 7 days, rate your pain on average (0-10)", "reverseScored": true, "scaleMax": 10 },
+      { "code": "GH-9", "textAr": "خلال آخر 7 أيام، قيّم شعورك بالإرهاق في المتوسط", "textEn": "In the past 7 days, rate your fatigue on average", "reverseScored": true, "scaleMax": 4 },
+      { "code": "GH-10", "textAr": "خلال آخر 7 أيام، كم مرة أزعجتك مشاعر مثل القلق أو الاكتئاب أو التهيج؟", "textEn": "In the past 7 days, how often were you bothered by emotional problems?", "reverseScored": true, "scaleMax": 4 }
+    ]
+  },
+  {
+    "code": "OXFORD_KNEE",
+    "nameAr": "مقياس أكسفورد للركبة (Oxford Knee Score)",
+    "nameEn": "Oxford Knee Score",
+    "licenseStatus": "licensed_required",
+    "descriptionAr": "أداة مرخّصة من جامعة أكسفورد. البنود الفعلية محجوبة حتى يتم توثيق الترخيص التجاري والنسخة العربية المعتمدة.",
+    "items": [
+      { "code": "OKS-1", "textAr": "بند مرخّص #1 — يتطلب ترخيصًا تجاريًا لعرض النص الفعلي", "textEn": "Licensed item #1", "reverseScored": false, "scaleMax": 4 },
+      { "code": "OKS-2", "textAr": "بند مرخّص #2 — يتطلب ترخيصًا تجاريًا لعرض النص الفعلي", "textEn": "Licensed item #2", "reverseScored": false, "scaleMax": 4 },
+      { "code": "OKS-3", "textAr": "بند مرخّص #3 — يتطلب ترخيصًا تجاريًا لعرض النص الفعلي", "textEn": "Licensed item #3", "reverseScored": false, "scaleMax": 4 },
+      { "code": "OKS-4", "textAr": "بند مرخّص #4 — يتطلب ترخيصًا تجاريًا لعرض النص الفعلي", "textEn": "Licensed item #4", "reverseScored": false, "scaleMax": 4 },
+      { "code": "OKS-5", "textAr": "بند مرخّص #5 — يتطلب ترخيصًا تجاريًا لعرض النص الفعلي", "textEn": "Licensed item #5", "reverseScored": false, "scaleMax": 4 },
+      { "code": "OKS-6", "textAr": "بند مرخّص #6 — يتطلب ترخيصًا تجاريًا لعرض النص الفعلي", "textEn": "Licensed item #6", "reverseScored": false, "scaleMax": 4 },
+      { "code": "OKS-7", "textAr": "بند مرخّص #7 — يتطلب ترخيصًا تجاريًا لعرض النص الفعلي", "textEn": "Licensed item #7", "reverseScored": false, "scaleMax": 4 },
+      { "code": "OKS-8", "textAr": "بند مرخّص #8 — يتطلب ترخيصًا تجاريًا لعرض النص الفعلي", "textEn": "Licensed item #8", "reverseScored": false, "scaleMax": 4 },
+      { "code": "OKS-9", "textAr": "بند مرخّص #9 — يتطلب ترخيصًا تجاريًا لعرض النص الفعلي", "textEn": "Licensed item #9", "reverseScored": false, "scaleMax": 4 },
+      { "code": "OKS-10", "textAr": "بند مرخّص #10 — يتطلب ترخيصًا تجاريًا لعرض النص الفعلي", "textEn": "Licensed item #10", "reverseScored": false, "scaleMax": 4 },
+      { "code": "OKS-11", "textAr": "بند مرخّص #11 — يتطلب ترخيصًا تجاريًا لعرض النص الفعلي", "textEn": "Licensed item #11", "reverseScored": false, "scaleMax": 4 },
+      { "code": "OKS-12", "textAr": "بند مرخّص #12 — يتطلب ترخيصًا تجاريًا لعرض النص الفعلي", "textEn": "Licensed item #12", "reverseScored": false, "scaleMax": 4 }
+    ]
+  },
+  {
+    "code": "EQ5D5L",
+    "nameAr": "مقياس جودة الحياة (EQ-5D-5L)",
+    "nameEn": "EuroQol EQ-5D-5L",
+    "licenseStatus": "licensed_required",
+    "descriptionAr": "أداة مرخّصة من EuroQol Group. البنود الفعلية محجوبة حتى يتم توثيق الترخيص (مجاني للاستخدام غير التجاري، مدفوع للتجاري).",
+    "items": [
+      { "code": "EQ5D-1", "textAr": "بُعد مرخّص #1 (الحركة) — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed dimension #1 (Mobility)", "reverseScored": false, "scaleMax": 4 },
+      { "code": "EQ5D-2", "textAr": "بُعد مرخّص #2 (العناية الذاتية) — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed dimension #2 (Self-Care)", "reverseScored": false, "scaleMax": 4 },
+      { "code": "EQ5D-3", "textAr": "بُعد مرخّص #3 (الأنشطة المعتادة) — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed dimension #3 (Usual Activities)", "reverseScored": false, "scaleMax": 4 },
+      { "code": "EQ5D-4", "textAr": "بُعد مرخّص #4 (الألم/الانزعاج) — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed dimension #4 (Pain/Discomfort)", "reverseScored": false, "scaleMax": 4 },
+      { "code": "EQ5D-5", "textAr": "بُعد مرخّص #5 (القلق/الاكتئاب) — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed dimension #5 (Anxiety/Depression)", "reverseScored": false, "scaleMax": 4 }
+    ]
+  },
+  {
+    "code": "ODI",
+    "nameAr": "مقياس إعاقة آلام الظهر (Oswestry Disability Index)",
+    "nameEn": "Oswestry Disability Index",
+    "licenseStatus": "licensed_required",
+    "descriptionAr": "أداة مرخّصة عبر Mapi/ePROVIDE، معتمدة ضمن ICHOM Low Back Pain Standard Set. البنود الفعلية محجوبة حتى توثيق الترخيص.",
+    "items": [
+      { "code": "ODI-1", "textAr": "بند مرخّص #1 (شدة الألم) — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #1 (Pain intensity)", "reverseScored": false, "scaleMax": 5 },
+      { "code": "ODI-2", "textAr": "بند مرخّص #2 (العناية الشخصية) — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #2 (Personal care)", "reverseScored": false, "scaleMax": 5 },
+      { "code": "ODI-3", "textAr": "بند مرخّص #3 (الرفع) — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #3 (Lifting)", "reverseScored": false, "scaleMax": 5 },
+      { "code": "ODI-4", "textAr": "بند مرخّص #4 (المشي) — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #4 (Walking)", "reverseScored": false, "scaleMax": 5 },
+      { "code": "ODI-5", "textAr": "بند مرخّص #5 (الجلوس) — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #5 (Sitting)", "reverseScored": false, "scaleMax": 5 },
+      { "code": "ODI-6", "textAr": "بند مرخّص #6 (الوقوف) — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #6 (Standing)", "reverseScored": false, "scaleMax": 5 },
+      { "code": "ODI-7", "textAr": "بند مرخّص #7 (النوم) — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #7 (Sleeping)", "reverseScored": false, "scaleMax": 5 },
+      { "code": "ODI-8", "textAr": "بند مرخّص #8 (الحياة الاجتماعية) — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #8 (Social life)", "reverseScored": false, "scaleMax": 5 },
+      { "code": "ODI-9", "textAr": "بند مرخّص #9 (السفر) — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #9 (Traveling)", "reverseScored": false, "scaleMax": 5 },
+      { "code": "ODI-10", "textAr": "بند مرخّص #10 (تغيّر الألم) — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #10 (Changing pain)", "reverseScored": false, "scaleMax": 5 }
+    ]
+  },
+  {
+    "code": "CATQUEST9SF",
+    "nameAr": "مقياس تأثير الساد على البصر (Catquest-9SF)",
+    "nameEn": "Catquest-9SF",
+    "licenseStatus": "licensed_required",
+    "descriptionAr": "أداة مستخدمة في التجربة الوطنية السعودية على مرضى الساد ضمن برنامج تحول القطاع الصحي. تتطلب توثيق ترخيص قبل عرض البنود الفعلية.",
+    "items": [
+      { "code": "CQ-1", "textAr": "بند مرخّص #1 — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #1", "reverseScored": false, "scaleMax": 4 },
+      { "code": "CQ-2", "textAr": "بند مرخّص #2 — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #2", "reverseScored": false, "scaleMax": 4 },
+      { "code": "CQ-3", "textAr": "بند مرخّص #3 — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #3", "reverseScored": false, "scaleMax": 4 },
+      { "code": "CQ-4", "textAr": "بند مرخّص #4 — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #4", "reverseScored": false, "scaleMax": 4 },
+      { "code": "CQ-5", "textAr": "بند مرخّص #5 — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #5", "reverseScored": false, "scaleMax": 4 },
+      { "code": "CQ-6", "textAr": "بند مرخّص #6 — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #6", "reverseScored": false, "scaleMax": 4 },
+      { "code": "CQ-7", "textAr": "بند مرخّص #7 — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #7", "reverseScored": false, "scaleMax": 4 },
+      { "code": "CQ-8", "textAr": "بند مرخّص #8 — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #8", "reverseScored": false, "scaleMax": 4 },
+      { "code": "CQ-9", "textAr": "بند مرخّص #9 — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #9", "reverseScored": false, "scaleMax": 4 }
+    ]
+  },
+  {
+    "code": "SF36",
+    "nameAr": "مقياس الصحة العامة (SF-36)",
+    "nameEn": "Short Form-36",
+    "licenseStatus": "licensed_required",
+    "descriptionAr": "مستخدم في مستشفى الملك فيصل التخصصي ضمن برنامج PROMs الخاص بهم. مرخّص عبر QualityMetric/RAND. البنود الفعلية محجوبة حتى توثيق الترخيص.",
+    "items": [
+      { "code": "SF36-1", "textAr": "بند مرخّص #1 من أصل 36 — يتطلب ترخيصًا لعرض النص الفعلي", "textEn": "Licensed item #1 of 36", "reverseScored": false, "scaleMax": 5 }
+    ]
+  }
+]

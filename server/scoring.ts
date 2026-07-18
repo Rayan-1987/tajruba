@@ -124,11 +124,25 @@ export const OXFORD_KNEE: InstrumentDefinition = {
   }
 };
 
+/**
+ * Raw sum across all 10 items (after reverse-scoring pain/fatigue/emotional-distress items),
+ * NOT the official PROMIS T-score. Official norm-based T-scores require the scoring tables
+ * published by HealthMeasures and must be integrated before this is used clinically.
+ */
+export const PROMIS_GH10: InstrumentDefinition = {
+  code: 'PROMIS_GH10',
+  minItems: 10,
+  maxItems: 10,
+  higherIsBetter: true,
+  mcidThreshold: 5
+};
+
 export const INSTRUMENTS: Record<string, InstrumentDefinition> = {
   PHQ9,
   GAD7,
   VAS_PAIN,
-  OXFORD_KNEE
+  OXFORD_KNEE,
+  PROMIS_GH10
 };
 
 export interface InstrumentItemValue {

@@ -34,7 +34,7 @@ async function start() {
     );
     next();
   });
-  app.use('/api', createApi(db, sessionSecret));
+  app.use('/api', createApi(db, sessionSecret, root));
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({ root, server: { middlewareMode: true }, appType: 'spa' });

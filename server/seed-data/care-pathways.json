@@ -1,0 +1,27 @@
+[
+  {
+    "code": "KNEE_REPLACEMENT",
+    "nameAr": "مسار استبدال مفصل الركبة",
+    "nameEn": "Knee Replacement Pathway",
+    "instrumentCodes": ["VAS_PAIN"],
+    "timepoints": [
+      { "code": "BASELINE", "nameAr": "ما قبل العملية", "offsetDays": 0 },
+      { "code": "W6", "nameAr": "6 أسابيع", "offsetDays": 42 },
+      { "code": "M3", "nameAr": "3 أشهر", "offsetDays": 90 },
+      { "code": "M6", "nameAr": "6 أشهر", "offsetDays": 180 },
+      { "code": "M12", "nameAr": "12 شهر", "offsetDays": 365 }
+    ]
+  },
+  {
+    "code": "LOW_BACK_PAIN",
+    "nameAr": "مسار آلام أسفل الظهر (ICHOM)",
+    "nameEn": "Low Back Pain Pathway (ICHOM)",
+    "instrumentCodes": ["VAS_PAIN"],
+    "timepoints": [
+      { "code": "BASELINE", "nameAr": "ما قبل العلاج", "offsetDays": 0 },
+      { "code": "M3", "nameAr": "3 أشهر", "offsetDays": 90 },
+      { "code": "M6", "nameAr": "6 أشهر", "offsetDays": 180 },
+      { "code": "M12", "nameAr": "12 شهر", "offsetDays": 365 }
+    ]
+  }
+]

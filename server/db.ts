@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS departments (
   facility_id TEXT NOT NULL REFERENCES facilities(id) ON DELETE CASCADE,
   name_ar TEXT NOT NULL,
   name_en TEXT NOT NULL,
-  service_type TEXT NOT NULL
+  service_type TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_departments_tenant ON departments(tenant_id);
 
@@ -58,24 +59,32 @@ CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token_hash);
 
 CREATE TABLE IF NOT EXISTS question_domains (
   id TEXT PRIMARY KEY,
-  code TEXT NOT NULL UNIQUE,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  code TEXT NOT NULL,
   name_ar TEXT NOT NULL,
   name_en TEXT NOT NULL,
   service_type TEXT NOT NULL,
-  benchmark_mean REAL NOT NULL DEFAULT 4.0
+  benchmark_mean REAL NOT NULL DEFAULT 4.0,
+  active INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(tenant_id, code)
 );
+CREATE INDEX IF NOT EXISTS idx_domains_tenant ON question_domains(tenant_id);
 
 CREATE TABLE IF NOT EXISTS questions (
   id TEXT PRIMARY KEY,
-  code TEXT NOT NULL UNIQUE,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  code TEXT NOT NULL,
   domain_id TEXT NOT NULL REFERENCES question_domains(id) ON DELETE CASCADE,
   text_ar TEXT NOT NULL,
   text_en TEXT NOT NULL,
   answer_type TEXT NOT NULL,
   service_type TEXT NOT NULL,
   requires_alert INTEGER NOT NULL DEFAULT 0,
-  sort_order INTEGER NOT NULL DEFAULT 0
+  active INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(tenant_id, code)
 );
+CREATE INDEX IF NOT EXISTS idx_questions_tenant ON questions(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_questions_service ON questions(service_type);
 
 CREATE TABLE IF NOT EXISTS survey_templates (
@@ -194,12 +203,15 @@ CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_logs(tenant_id);
 
 CREATE TABLE IF NOT EXISTS proms_instruments (
   id TEXT PRIMARY KEY,
-  code TEXT NOT NULL UNIQUE,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  code TEXT NOT NULL,
   name_ar TEXT NOT NULL,
   name_en TEXT NOT NULL,
   license_status TEXT NOT NULL,
-  description_ar TEXT NOT NULL
+  description_ar TEXT NOT NULL,
+  UNIQUE(tenant_id, code)
 );
+CREATE INDEX IF NOT EXISTS idx_instruments_tenant ON proms_instruments(tenant_id);
 
 CREATE TABLE IF NOT EXISTS proms_instrument_items (
   id TEXT PRIMARY KEY,

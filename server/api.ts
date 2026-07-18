@@ -23,6 +23,7 @@ import {
   scoreQuestion,
   type InstrumentItemValue
 } from './scoring.ts';
+import { provisionTenantDefaults } from './provisioning.ts';
 import type { AnswerType, RecoveryStatus, Role, ServiceType } from './types.ts';
 
 function uid(): string {
@@ -60,7 +61,7 @@ function departmentScopeFilter(req: Request, tableAlias: string): { clause: stri
   return { clause: '', params: [] };
 }
 
-export function createApi(db: Db, _sessionSecret: string): Router {
+export function createApi(db: Db, _sessionSecret: string, root: string): Router {
   const router = Router();
   router.use(attachSession(db));
 
@@ -199,6 +200,67 @@ export function createApi(db: Db, _sessionSecret: string): Router {
   });
 
   // -------------------------------------------------------------------------
+  // Tenant (hospital) self-registration — public
+  // -------------------------------------------------------------------------
+  router.post('/tenants/register', express.json({ limit: '8kb' }), (req: Request, res: Response) => {
+    const body = req.body as {
+      hospitalNameAr?: string;
+      hospitalNameEn?: string;
+      adminFullName?: string;
+      adminEmail?: string;
+      adminPassword?: string;
+    };
+    const hospitalNameAr = body.hospitalNameAr?.trim();
+    const hospitalNameEn = body.hospitalNameEn?.trim();
+    const adminFullName = body.adminFullName?.trim();
+    const adminEmail = body.adminEmail?.toLowerCase().trim();
+    const adminPassword = body.adminPassword;
+
+    if (!hospitalNameAr || !hospitalNameEn || !adminFullName || !adminEmail || !adminPassword) {
+      res.status(400).json({ error: 'missing_fields' });
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail)) {
+      res.status(400).json({ error: 'invalid_email' });
+      return;
+    }
+    if (adminPassword.length < 8) {
+      res.status(400).json({ error: 'password_too_short' });
+      return;
+    }
+    const existingUser = db.prepare('SELECT id FROM users WHERE email = ?').get(adminEmail);
+    if (existingUser) {
+      res.status(409).json({ error: 'email_taken' });
+      return;
+    }
+
+    const tenantId = uid();
+    const slug = `${hospitalNameEn.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}-${tenantId.slice(0, 6)}`;
+    db.prepare('INSERT INTO tenants (id, name_ar, name_en, slug) VALUES (?, ?, ?, ?)').run(tenantId, hospitalNameAr, hospitalNameEn, slug);
+
+    const facilityId = uid();
+    db.prepare('INSERT INTO facilities (id, tenant_id, name_ar, name_en) VALUES (?, ?, ?, ?)').run(
+      facilityId,
+      tenantId,
+      'المبنى الرئيسي',
+      'Main Building'
+    );
+
+    const adminId = uid();
+    db.prepare(
+      'INSERT INTO users (id, tenant_id, email, password_hash, role, department_id, full_name) VALUES (?, ?, ?, ?, ?, NULL, ?)'
+    ).run(adminId, tenantId, adminEmail, hashPassword(adminPassword), 'SystemAdmin', adminFullName);
+
+    provisionTenantDefaults(db, root, tenantId);
+
+    logAudit(db, tenantId, adminId, 'tenant_registered', 'tenant', tenantId, { hospitalNameEn });
+
+    const { token, expiresAt } = createSession(db, adminId);
+    setSessionCookie(res, token, expiresAt);
+    res.status(201).json({ ok: true });
+  });
+
+  // -------------------------------------------------------------------------
   // Auth
   // -------------------------------------------------------------------------
   router.post('/auth/login', express.json({ limit: '8kb' }), (req: Request, res: Response) => {
@@ -240,16 +302,20 @@ export function createApi(db: Db, _sessionSecret: string): Router {
   // -------------------------------------------------------------------------
   router.get('/departments', (req: Request, res: Response) => {
     const rows = db
-      .prepare('SELECT id, name_ar, name_en, service_type FROM departments WHERE tenant_id = ? ORDER BY service_type')
+      .prepare('SELECT id, name_ar, name_en, service_type FROM departments WHERE tenant_id = ? AND active = 1 ORDER BY service_type')
       .all(req.user!.tenantId);
     res.json({ departments: rows });
   });
 
-  router.get('/question-bank', (_req: Request, res: Response) => {
-    const domains = db.prepare('SELECT id, code, name_ar, name_en, service_type, benchmark_mean FROM question_domains').all();
+  router.get('/question-bank', (req: Request, res: Response) => {
+    const domains = db
+      .prepare('SELECT id, code, name_ar, name_en, service_type, benchmark_mean FROM question_domains WHERE tenant_id = ? AND active = 1')
+      .all(req.user!.tenantId);
     const questions = db
-      .prepare('SELECT id, code, domain_id, text_ar, text_en, answer_type, service_type, requires_alert FROM questions ORDER BY sort_order')
-      .all();
+      .prepare(
+        'SELECT id, code, domain_id, text_ar, text_en, answer_type, service_type, requires_alert FROM questions WHERE tenant_id = ? AND active = 1 ORDER BY sort_order'
+      )
+      .all(req.user!.tenantId);
     res.json({ domains, questions });
   });
 
@@ -286,9 +352,9 @@ export function createApi(db: Db, _sessionSecret: string): Router {
     const domains = db
       .prepare(
         `SELECT id, code, name_ar, name_en, service_type, benchmark_mean FROM question_domains
-         WHERE (? IS NULL OR service_type = ?)`
+         WHERE tenant_id = ? AND active = 1 AND (? IS NULL OR service_type = ?)`
       )
-      .all(serviceType ?? null, serviceType ?? null) as {
+      .all(req.user!.tenantId, serviceType ?? null, serviceType ?? null) as {
       id: string;
       code: string;
       name_ar: string;
@@ -531,8 +597,10 @@ export function createApi(db: Db, _sessionSecret: string): Router {
   // -------------------------------------------------------------------------
   // PROMs
   // -------------------------------------------------------------------------
-  router.get('/proms/instruments', (_req: Request, res: Response) => {
-    const instruments = db.prepare('SELECT id, code, name_ar, name_en, license_status, description_ar FROM proms_instruments').all();
+  router.get('/proms/instruments', (req: Request, res: Response) => {
+    const instruments = db
+      .prepare('SELECT id, code, name_ar, name_en, license_status, description_ar FROM proms_instruments WHERE tenant_id = ?')
+      .all(req.user!.tenantId);
     res.json({ instruments });
   });
 
