@@ -1,6 +1,6 @@
 export type Role = 'SystemAdmin' | 'QualityManager' | 'DepartmentManager' | 'ExecutiveViewer';
 
-export type ServiceType = 'MP' | 'IP' | 'ED' | 'AS' | 'HH' | 'BB';
+export type ServiceType = 'MP' | 'IP' | 'ED' | 'AS' | 'HH' | 'BB' | 'LD' | 'PED' | 'DIA' | 'ONC' | 'REH' | 'TEL';
 
 export const SERVICE_LABELS_AR: Record<ServiceType, string> = {
   MP: 'الممارسة الطبية (العيادات)',
@@ -8,7 +8,13 @@ export const SERVICE_LABELS_AR: Record<ServiceType, string> = {
   ED: 'الطوارئ',
   AS: 'الجراحة النهارية',
   HH: 'الرعاية المنزلية',
-  BB: 'بنك الدم'
+  BB: 'بنك الدم',
+  LD: 'الولادة',
+  PED: 'الأطفال',
+  DIA: 'الغسيل الكلوي',
+  ONC: 'الأورام',
+  REH: 'التأهيل',
+  TEL: 'العيادة الافتراضية'
 };
 
 export const CATEGORY_LABELS_AR: Record<string, string> = {
@@ -63,7 +69,7 @@ export interface Department {
 
 export const ROLE_LABELS_AR: Record<Role, string> = {
   SystemAdmin: 'مدير النظام',
-  QualityManager: 'مدير الجودة',
+  QualityManager: 'إدارة تجربة المريض',
   DepartmentManager: 'مدير قسم',
   ExecutiveViewer: 'مسؤول تنفيذي'
 };

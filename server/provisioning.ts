@@ -76,14 +76,22 @@ interface AncillaryServiceSeed {
 
 // Real PX-program service-line categories (matches how Saudi hospitals typically report,
 // e.g. Press Ganey service-line groupings): Medical Practice, Inpatient, Emergency,
-// Ambulatory Surgery, Home Health, Blood Bank.
+// Ambulatory Surgery, Home Health, Blood Bank, plus six specialty lines with their own
+// tailored PREMs content (Maternity, Pediatrics, Dialysis, Oncology, Rehabilitation,
+// Telehealth) — these run alongside, not instead of, the general Inpatient survey.
 const TEMPLATE_NAMES: Record<ServiceType, { ar: string; en: string }> = {
   MP: { ar: 'استبيان الممارسة الطبية (العيادات)', en: 'Medical Practice Experience Survey' },
   IP: { ar: 'استبيان تجربة التنويم', en: 'Inpatient Experience Survey' },
   ED: { ar: 'استبيان تجربة الطوارئ', en: 'Emergency Experience Survey' },
   AS: { ar: 'استبيان الجراحة النهارية', en: 'Ambulatory Surgery Experience Survey' },
   HH: { ar: 'استبيان الرعاية المنزلية', en: 'Home Health Experience Survey' },
-  BB: { ar: 'استبيان بنك الدم', en: 'Blood Bank Experience Survey' }
+  BB: { ar: 'استبيان بنك الدم', en: 'Blood Bank Experience Survey' },
+  LD: { ar: 'استبيان تجربة الولادة', en: 'Maternity Experience Survey' },
+  PED: { ar: 'استبيان تجربة الأطفال', en: 'Pediatrics Experience Survey' },
+  DIA: { ar: 'استبيان تجربة الغسيل الكلوي', en: 'Dialysis Experience Survey' },
+  ONC: { ar: 'استبيان تجربة رعاية الأورام', en: 'Oncology Experience Survey' },
+  REH: { ar: 'استبيان تجربة التأهيل', en: 'Rehabilitation Experience Survey' },
+  TEL: { ar: 'استبيان العيادة الافتراضية', en: 'Telehealth Experience Survey' }
 };
 
 /**
@@ -104,7 +112,13 @@ export const DEFAULT_DEPARTMENTS: { service: ServiceType; nameAr: string; nameEn
   { service: 'ED', nameAr: 'الطوارئ', nameEn: 'Emergency Department' },
   { service: 'AS', nameAr: 'الجراحة النهارية', nameEn: 'Ambulatory Surgery' },
   { service: 'HH', nameAr: 'الرعاية المنزلية', nameEn: 'Home Health' },
-  { service: 'BB', nameAr: 'بنك الدم', nameEn: 'Blood Bank' }
+  { service: 'BB', nameAr: 'بنك الدم', nameEn: 'Blood Bank' },
+  { service: 'LD', nameAr: 'الولادة', nameEn: 'Maternity & Labor Delivery' },
+  { service: 'PED', nameAr: 'الأطفال', nameEn: 'Pediatrics' },
+  { service: 'DIA', nameAr: 'الغسيل الكلوي', nameEn: 'Dialysis' },
+  { service: 'ONC', nameAr: 'الأورام', nameEn: 'Oncology' },
+  { service: 'REH', nameAr: 'التأهيل', nameEn: 'Rehabilitation' },
+  { service: 'TEL', nameAr: 'العيادة الافتراضية', nameEn: 'Telehealth' }
 ];
 
 export interface TenantProvisioningResult {

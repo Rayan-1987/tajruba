@@ -1,13 +1,14 @@
 export type Role = 'SystemAdmin' | 'QualityManager' | 'DepartmentManager' | 'ExecutiveViewer';
 
-// Main service lines match real Saudi hospital PX program reporting (e.g. Press Ganey
+// Core service lines match real Saudi hospital PX program reporting (e.g. Press Ganey
 // service-line grouping): Medical Practice, Inpatient, Emergency, Ambulatory Surgery,
 // Home Health, Blood Bank. Lab/Radiology/Pharmacy are NOT separate service lines — they
-// are ancillary experiences a patient may have during a visit to any of the six, surfaced
+// are ancillary experiences a patient may have during a visit to any of these, surfaced
 // as gated follow-up questions inside whichever service's survey the patient took.
-export type ServiceType = 'MP' | 'IP' | 'ED' | 'AS' | 'HH' | 'BB';
+// The remaining six are specialty service lines added for broader clinical coverage.
+export type ServiceType = 'MP' | 'IP' | 'ED' | 'AS' | 'HH' | 'BB' | 'LD' | 'PED' | 'DIA' | 'ONC' | 'REH' | 'TEL';
 
-export const SERVICE_TYPES: ServiceType[] = ['MP', 'IP', 'ED', 'AS', 'HH', 'BB'];
+export const SERVICE_TYPES: ServiceType[] = ['MP', 'IP', 'ED', 'AS', 'HH', 'BB', 'LD', 'PED', 'DIA', 'ONC', 'REH', 'TEL'];
 
 export const SERVICE_LABELS_AR: Record<ServiceType, string> = {
   MP: 'الممارسة الطبية (العيادات)',
@@ -15,7 +16,13 @@ export const SERVICE_LABELS_AR: Record<ServiceType, string> = {
   ED: 'الطوارئ',
   AS: 'الجراحة النهارية',
   HH: 'الرعاية المنزلية',
-  BB: 'بنك الدم'
+  BB: 'بنك الدم',
+  LD: 'الولادة',
+  PED: 'الأطفال',
+  DIA: 'الغسيل الكلوي',
+  ONC: 'الأورام',
+  REH: 'التأهيل',
+  TEL: 'العيادة الافتراضية'
 };
 
 export type AncillaryService = 'LAB' | 'RAD' | 'PHARM';

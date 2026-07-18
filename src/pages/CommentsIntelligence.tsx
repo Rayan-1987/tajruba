@@ -45,7 +45,7 @@ export default function CommentsIntelligence() {
     const status = comment.case_status ? NEXT_STATUS[comment.case_status] : 'assigned';
     if (!status) return;
     if (status === 'closed' && user?.role === 'DepartmentManager') {
-      alert('إغلاق الحالة يتطلب اعتماد مدير الجودة.');
+      alert('إغلاق الحالة يتطلب اعتماد إدارة تجربة المريض.');
       return;
     }
     await api.patch(`/comments/${comment.id}/status`, { status });

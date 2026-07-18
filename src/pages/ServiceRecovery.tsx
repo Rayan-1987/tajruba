@@ -35,7 +35,7 @@ export default function ServiceRecovery() {
     const nextStatus = NEXT_STATUS[c.status];
     if (!nextStatus) return;
     if (nextStatus === 'closed' && user?.role === 'DepartmentManager') {
-      alert('إغلاق الحالة يتطلب اعتماد مدير الجودة (متطلب CBAHI للتوثيق).');
+      alert('إغلاق الحالة يتطلب اعتماد إدارة تجربة المريض (متطلب CBAHI للتوثيق).');
       return;
     }
     const res = await api.patch<{ patientNotified: boolean }>(`/comments/${c.comment_id}/status`, {

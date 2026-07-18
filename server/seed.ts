@@ -6,7 +6,7 @@ import { hashPassword } from './auth.ts';
 import { redactPii, createDefaultAnalyzer, shouldAlert } from './comments.ts';
 import { scoreInstrument, VAS_PAIN, type InstrumentItemValue } from './scoring.ts';
 import { DEFAULT_DEPARTMENTS, provisionTenantDefaults } from './provisioning.ts';
-import type { AnswerType, ServiceType } from './types.ts';
+import { SERVICE_TYPES, type AnswerType, type ServiceType } from './types.ts';
 
 interface DomainSeed {
   code: string;
@@ -159,26 +159,25 @@ export function seedDatabase(db: Db, root: string): void {
 
   // Inpatient is split into its usual wards (not one lump department) — same default
   // breakdown a newly self-registered hospital gets, so the demo tenant is representative.
-  const departmentsByService: Record<ServiceType, string[]> = { MP: [], IP: [], ED: [], AS: [], HH: [], BB: [] };
+  const departmentsByService = Object.fromEntries(SERVICE_TYPES.map((s) => [s, [] as string[]])) as Record<
+    ServiceType,
+    string[]
+  >;
   for (const dept of DEFAULT_DEPARTMENTS) {
     const id = uid();
     departmentsByService[dept.service].push(id);
     insertDept.run(id, tenantId, facilityId, dept.nameAr, dept.nameEn, dept.service);
   }
-  const departmentIds: Record<ServiceType, string> = {
-    MP: departmentsByService.MP[0],
-    IP: departmentsByService.IP[0],
-    ED: departmentsByService.ED[0],
-    AS: departmentsByService.AS[0],
-    HH: departmentsByService.HH[0],
-    BB: departmentsByService.BB[0]
-  };
+  const departmentIds = Object.fromEntries(SERVICE_TYPES.map((s) => [s, departmentsByService[s][0]])) as Record<
+    ServiceType,
+    string
+  >;
 
   // --- Users -----------------------------------------------------------------
   const adminId = uid();
   insertUser.run(adminId, tenantId, 'admin@tajruba.sa', hashPassword(DEMO_PASSWORDS.admin), 'SystemAdmin', null, 'مدير النظام');
   const qualityId = uid();
-  insertUser.run(qualityId, tenantId, 'quality@tajruba.sa', hashPassword(DEMO_PASSWORDS.quality), 'QualityManager', null, 'مدير الجودة');
+  insertUser.run(qualityId, tenantId, 'quality@tajruba.sa', hashPassword(DEMO_PASSWORDS.quality), 'QualityManager', null, 'إدارة تجربة المريض');
   const deptUserId = uid();
   insertUser.run(
     deptUserId,
@@ -197,7 +196,7 @@ export function seedDatabase(db: Db, root: string): void {
 
   // --- Demo responses across the last 6 months per department (each Inpatient ward gets its own) ---
   let commentIndex = 0;
-  const nextDeptIndexByService: Record<ServiceType, number> = { MP: 0, IP: 0, ED: 0, AS: 0, HH: 0, BB: 0 };
+  const nextDeptIndexByService = Object.fromEntries(SERVICE_TYPES.map((s) => [s, 0])) as Record<ServiceType, number>;
   for (const deptDef of DEFAULT_DEPARTMENTS) {
     const service = deptDef.service;
     const deptId = departmentsByService[service][nextDeptIndexByService[service]];
