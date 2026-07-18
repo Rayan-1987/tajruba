@@ -16,7 +16,8 @@ const NAV_ITEMS: { to: string; label: string; roles?: Role[] }[] = [
   { to: '/dashboard/proms', label: 'النتائج الصحية (PROMs)' },
   { to: '/dashboard/phone-survey', label: 'استبيان هاتفي' },
   { to: '/dashboard/survey-studio', label: 'استوديو الاستبيانات', roles: ['SystemAdmin', 'QualityManager'] },
-  { to: '/dashboard/data-center', label: 'مركز البيانات', roles: ['SystemAdmin', 'QualityManager'] }
+  { to: '/dashboard/data-center', label: 'مركز البيانات', roles: ['SystemAdmin', 'QualityManager'] },
+  { to: '/dashboard/settings', label: 'الإعدادات', roles: ['SystemAdmin'] }
 ];
 
 export default function DashboardLayout() {

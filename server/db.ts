@@ -15,6 +15,17 @@ CREATE TABLE IF NOT EXISTS tenants (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS tenant_integrations (
+  tenant_id TEXT PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+  sms_provider TEXT NOT NULL DEFAULT 'console',
+  sms_api_key TEXT,
+  sms_sender_name TEXT,
+  default_language TEXT NOT NULL DEFAULT 'ar',
+  his_webhook_key_hash TEXT,
+  his_webhook_enabled INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS facilities (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,

@@ -25,6 +25,7 @@ import {
   type InstrumentItemValue
 } from './scoring.ts';
 import { DEFAULT_DEPARTMENT_NAMES, provisionTenantDefaults } from './provisioning.ts';
+import { composeInvitationMessage, createSmsProvider, type TenantSmsConfig } from './sms.ts';
 import { SERVICE_TYPES, type AnswerType, type RecoveryStatus, type Role, type ServiceType } from './types.ts';
 
 function uid(): string {
@@ -53,6 +54,41 @@ function logAudit(
     entityId,
     metadata ? JSON.stringify(metadata) : null
   );
+}
+
+interface TenantIntegrationsRow {
+  tenant_id: string;
+  sms_provider: string;
+  sms_api_key: string | null;
+  sms_sender_name: string | null;
+  default_language: string;
+  his_webhook_key_hash: string | null;
+  his_webhook_enabled: number;
+}
+
+function getOrCreateIntegrationsRow(db: Db, tenantId: string): TenantIntegrationsRow {
+  const existing = db.prepare('SELECT * FROM tenant_integrations WHERE tenant_id = ?').get(tenantId) as
+    | TenantIntegrationsRow
+    | undefined;
+  if (existing) return existing;
+  db.prepare('INSERT INTO tenant_integrations (tenant_id) VALUES (?)').run(tenantId);
+  return db.prepare('SELECT * FROM tenant_integrations WHERE tenant_id = ?').get(tenantId) as unknown as TenantIntegrationsRow;
+}
+
+function getTenantSmsConfig(db: Db, tenantId: string): TenantSmsConfig {
+  const row = getOrCreateIntegrationsRow(db, tenantId);
+  return {
+    provider: row.sms_provider,
+    apiKey: row.sms_api_key,
+    senderName: row.sms_sender_name,
+    defaultLanguage: row.default_language === 'en' ? 'en' : 'ar'
+  };
+}
+
+function maskSecret(value: string | null): string | null {
+  if (!value) return null;
+  if (value.length <= 4) return '••••';
+  return `••••${value.slice(-4)}`;
 }
 
 function departmentScopeFilter(req: Request, tableAlias: string): { clause: string; params: (string | number)[] } {
@@ -309,6 +345,83 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     res.json({ user: req.user });
   });
 
+  // -------------------------------------------------------------------------
+  // HIS/EMR webhook (public — authenticated via X-Api-Key, not a session)
+  // -------------------------------------------------------------------------
+  router.post('/webhooks/invitations', express.json({ limit: '256kb' }), async (req: Request, res: Response) => {
+    const apiKey = req.get('X-Api-Key');
+    if (!apiKey) {
+      res.status(401).json({ error: 'missing_api_key' });
+      return;
+    }
+    const integration = db
+      .prepare('SELECT tenant_id FROM tenant_integrations WHERE his_webhook_key_hash = ? AND his_webhook_enabled = 1')
+      .get(sha256(apiKey)) as { tenant_id: string } | undefined;
+    if (!integration) {
+      res.status(401).json({ error: 'invalid_api_key' });
+      return;
+    }
+    const tenantId = integration.tenant_id;
+
+    const { rows, templateId, departmentId, channel } = req.body as {
+      rows?: { phone: string }[];
+      templateId?: string;
+      departmentId?: string;
+      channel?: 'sms' | 'whatsapp';
+    };
+    if (!Array.isArray(rows) || rows.length === 0 || !templateId || !departmentId) {
+      res.status(400).json({ error: 'invalid_payload' });
+      return;
+    }
+    const template = db
+      .prepare('SELECT service_type, name_ar, name_en FROM survey_templates WHERE id = ? AND tenant_id = ?')
+      .get(templateId, tenantId) as { service_type: string; name_ar: string; name_en: string } | undefined;
+    const department = db.prepare('SELECT id FROM departments WHERE id = ? AND tenant_id = ?').get(departmentId, tenantId);
+    if (!template || !department) {
+      res.status(404).json({ error: 'template_or_department_not_found' });
+      return;
+    }
+
+    const smsConfig = getTenantSmsConfig(db, tenantId);
+    const provider = createSmsProvider(smsConfig);
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const effectiveChannel = channel ?? 'sms';
+
+    const insert = db.prepare(
+      `INSERT INTO survey_invitations
+       (id, tenant_id, template_id, department_id, service_type, token_hash, patient_phone_hash, channel, status, expires_at, sent_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const now = new Date().toISOString();
+    const expires = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+    let created = 0;
+    let sent = 0;
+    for (const row of rows) {
+      if (!row.phone) continue;
+      const rawToken = uid();
+      const surveyUrl = `${baseUrl}/s/${rawToken}`;
+      const message = composeInvitationMessage(template.name_ar, template.name_en, surveyUrl, smsConfig.defaultLanguage);
+      const result = await provider.send(row.phone, message);
+      if (result.ok) sent += 1;
+      insert.run(
+        uid(),
+        tenantId,
+        templateId,
+        departmentId,
+        template.service_type,
+        sha256(rawToken),
+        sha256(row.phone),
+        effectiveChannel,
+        result.ok ? 'sent' : 'pending',
+        expires,
+        now
+      );
+      created += 1;
+    }
+    logAudit(db, tenantId, null, 'invitations_webhook_created', 'survey_invitation', null, { count: created, sent });
+    res.status(201).json({ created, sent });
+  });
+
   // Everything below requires an authenticated session.
   router.use(requireAuth);
 
@@ -561,7 +674,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     '/invitations/bulk',
     requireRole('SystemAdmin', 'QualityManager', 'DepartmentManager'),
     express.json({ limit: '256kb' }),
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       const { rows, templateId, departmentId, channel } = req.body as {
         rows?: { phone: string }[];
         templateId?: string;
@@ -577,39 +690,59 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         return;
       }
       const template = db
-        .prepare('SELECT service_type FROM survey_templates WHERE id = ? AND tenant_id = ?')
-        .get(templateId, req.user!.tenantId) as { service_type: string } | undefined;
+        .prepare('SELECT service_type, name_ar, name_en FROM survey_templates WHERE id = ? AND tenant_id = ?')
+        .get(templateId, req.user!.tenantId) as { service_type: string; name_ar: string; name_en: string } | undefined;
       if (!template) {
         res.status(404).json({ error: 'template_not_found' });
         return;
       }
 
+      const smsConfig = getTenantSmsConfig(db, req.user!.tenantId);
+      const provider = createSmsProvider(smsConfig);
+      const baseUrl = `${req.protocol}://${req.get('host')}`;
+      const effectiveChannel = channel ?? 'sms';
+
       const insert = db.prepare(
         `INSERT INTO survey_invitations
          (id, tenant_id, template_id, department_id, service_type, token_hash, patient_phone_hash, channel, status, expires_at, sent_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sent', ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
       const now = new Date().toISOString();
       const expires = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
       let created = 0;
+      let sent = 0;
       for (const row of rows) {
         if (!row.phone) continue;
+        const rawToken = uid();
+        let status = 'pending';
+        if (effectiveChannel === 'sms' || effectiveChannel === 'whatsapp') {
+          const surveyUrl = `${baseUrl}/s/${rawToken}`;
+          const message = composeInvitationMessage(template.name_ar, template.name_en, surveyUrl, smsConfig.defaultLanguage);
+          const result = await provider.send(row.phone, message);
+          status = result.ok ? 'sent' : 'pending';
+          if (result.ok) sent += 1;
+        }
         insert.run(
           uid(),
           req.user!.tenantId,
           templateId,
           departmentId,
           template.service_type,
-          sha256(uid()),
+          sha256(rawToken),
           sha256(row.phone),
-          channel ?? 'sms',
+          effectiveChannel,
+          status,
           expires,
           now
         );
         created += 1;
       }
-      logAudit(db, req.user!.tenantId, req.user!.id, 'invitations_bulk_created', 'survey_invitation', null, { count: created });
-      res.status(201).json({ created });
+      logAudit(db, req.user!.tenantId, req.user!.id, 'invitations_bulk_created', 'survey_invitation', null, {
+        count: created,
+        sent,
+        smsProvider: provider.name
+      });
+      res.status(201).json({ created, sent, smsProvider: provider.name });
     }
   );
 
@@ -826,6 +959,102 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       res.status(201).json({ id: episodeId });
     }
   );
+
+  // -------------------------------------------------------------------------
+  // Settings: integrations (SMS/WhatsApp provider + HIS webhook)
+  // -------------------------------------------------------------------------
+  router.get('/settings/integrations', requireRole('SystemAdmin'), (req: Request, res: Response) => {
+    const row = getOrCreateIntegrationsRow(db, req.user!.tenantId);
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    res.json({
+      smsProvider: row.sms_provider,
+      smsSenderName: row.sms_sender_name,
+      smsApiKeyMasked: maskSecret(row.sms_api_key),
+      defaultLanguage: row.default_language,
+      hisWebhookEnabled: !!row.his_webhook_enabled,
+      hisWebhookConfigured: !!row.his_webhook_key_hash,
+      hisWebhookUrl: `${baseUrl}/api/webhooks/invitations`
+    });
+  });
+
+  router.patch(
+    '/settings/integrations',
+    requireRole('SystemAdmin'),
+    express.json({ limit: '8kb' }),
+    (req: Request, res: Response) => {
+      const body = req.body as {
+        smsProvider?: string;
+        smsApiKey?: string;
+        smsSenderName?: string;
+        defaultLanguage?: string;
+        hisWebhookEnabled?: boolean;
+      };
+      getOrCreateIntegrationsRow(db, req.user!.tenantId);
+
+      const updates: string[] = [];
+      const params: (string | number)[] = [];
+      if (body.smsProvider !== undefined) {
+        updates.push('sms_provider = ?');
+        params.push(body.smsProvider);
+      }
+      if (body.smsApiKey !== undefined && body.smsApiKey.trim().length > 0) {
+        updates.push('sms_api_key = ?');
+        params.push(body.smsApiKey.trim());
+      }
+      if (body.smsSenderName !== undefined) {
+        updates.push('sms_sender_name = ?');
+        params.push(body.smsSenderName.trim());
+      }
+      if (body.defaultLanguage !== undefined && (body.defaultLanguage === 'ar' || body.defaultLanguage === 'en')) {
+        updates.push('default_language = ?');
+        params.push(body.defaultLanguage);
+      }
+      if (body.hisWebhookEnabled !== undefined) {
+        updates.push('his_webhook_enabled = ?');
+        params.push(body.hisWebhookEnabled ? 1 : 0);
+      }
+      if (updates.length > 0) {
+        updates.push("updated_at = datetime('now')");
+        db.prepare(`UPDATE tenant_integrations SET ${updates.join(', ')} WHERE tenant_id = ?`).run(...params, req.user!.tenantId);
+      }
+      logAudit(db, req.user!.tenantId, req.user!.id, 'integrations_updated', 'tenant_integrations', null, {
+        fields: Object.keys(body)
+      });
+      res.json({ ok: true });
+    }
+  );
+
+  router.post(
+    '/settings/integrations/test-sms',
+    requireRole('SystemAdmin'),
+    express.json({ limit: '8kb' }),
+    async (req: Request, res: Response) => {
+      const { phone } = req.body as { phone?: string };
+      if (!phone) {
+        res.status(400).json({ error: 'phone_required' });
+        return;
+      }
+      const smsConfig = getTenantSmsConfig(db, req.user!.tenantId);
+      const provider = createSmsProvider(smsConfig);
+      const message =
+        smsConfig.defaultLanguage === 'en'
+          ? 'This is a test message from Tajruba.'
+          : 'هذه رسالة تجريبية من منصة تجربة.';
+      const result = await provider.send(phone, message);
+      res.json({ ok: result.ok, provider: provider.name, error: result.error });
+    }
+  );
+
+  router.post('/settings/integrations/webhook-key/regenerate', requireRole('SystemAdmin'), (req: Request, res: Response) => {
+    getOrCreateIntegrationsRow(db, req.user!.tenantId);
+    const rawKey = `tjb_${uid().replace(/-/g, '')}`;
+    db.prepare("UPDATE tenant_integrations SET his_webhook_key_hash = ?, his_webhook_enabled = 1, updated_at = datetime('now') WHERE tenant_id = ?").run(
+      sha256(rawKey),
+      req.user!.tenantId
+    );
+    logAudit(db, req.user!.tenantId, req.user!.id, 'webhook_key_regenerated', 'tenant_integrations', null, null);
+    res.json({ key: rawKey });
+  });
 
   // -------------------------------------------------------------------------
   // Audit log
