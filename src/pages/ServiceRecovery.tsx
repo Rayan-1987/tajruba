@@ -14,6 +14,8 @@ interface RecoveryCase {
   redacted_text: string;
   severity: number;
   category: string;
+  patient_contact_opt_in: number;
+  patient_notified_at: string | null;
 }
 
 const COLUMNS: RecoveryCase['status'][] = ['new', 'assigned', 'in_progress', 'closed'];
@@ -36,7 +38,13 @@ export default function ServiceRecovery() {
       alert('إغلاق الحالة يتطلب اعتماد مدير الجودة (متطلب CBAHI للتوثيق).');
       return;
     }
-    await api.patch(`/comments/${c.comment_id}/status`, { status: nextStatus, resolutionNotes: notesDraft[c.id] || undefined });
+    const res = await api.patch<{ patientNotified: boolean }>(`/comments/${c.comment_id}/status`, {
+      status: nextStatus,
+      resolutionNotes: notesDraft[c.id] || undefined
+    });
+    if (nextStatus === 'closed' && c.patient_contact_opt_in && res.patientNotified) {
+      alert('تم إشعار المريض برسالة نصية بأن ملاحظته تمت معالجتها.');
+    }
     load();
   };
 
@@ -58,9 +66,14 @@ export default function ServiceRecovery() {
                 .filter((c) => c.status === status)
                 .map((c) => (
                   <div key={c.id} className="rounded-xl bg-white p-3 shadow-sm">
-                    <div className="mb-1 flex items-center gap-2">
+                    <div className="mb-1 flex flex-wrap items-center gap-2">
                       <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700">خطورة {c.severity}</span>
                       <span className="text-[10px] text-slate-400">{CATEGORY_LABELS_AR[c.category] ?? c.category}</span>
+                      {c.patient_contact_opt_in === 1 && (
+                        <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                          {c.patient_notified_at ? '✓ تم إشعار المريض' : 'سيُشعَر المريض عند الإغلاق'}
+                        </span>
+                      )}
                     </div>
                     <p className="mb-2 text-xs text-slate-700">{c.redacted_text}</p>
                     {c.resolution_notes && <p className="mb-2 text-[11px] text-slate-500">{c.resolution_notes}</p>}

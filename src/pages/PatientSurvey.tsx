@@ -16,6 +16,8 @@ export default function PatientSurvey() {
   const [error, setError] = useState<string | null>(null);
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [comment, setComment] = useState('');
+  const [contactOptIn, setContactOptIn] = useState(false);
+  const [contactPhone, setContactPhone] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -76,12 +78,15 @@ export default function PatientSurvey() {
     setSubmitting(true);
     try {
       const visibleIds = new Set(visibleQuestions.map((q) => q.id));
+      const optIn = Boolean(comment.trim()) && contactOptIn && Boolean(contactPhone.trim());
       await api.post(`/public/surveys/${token}/submit`, {
         answers: Object.entries(answers)
           .filter(([questionId]) => visibleIds.has(questionId))
           .map(([questionId, value]) => ({ questionId, value })),
         comment: comment.trim() || undefined,
-        language: 'ar'
+        language: 'ar',
+        contactOptIn: optIn || undefined,
+        contactPhone: optIn ? contactPhone.trim() : undefined
       });
       setSubmitted(true);
     } catch {
@@ -133,6 +138,22 @@ export default function PatientSurvey() {
             className="w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-emerald-400 focus:outline-none"
             placeholder="اكتب ملاحظتك هنا..."
           />
+          {comment.trim() && (
+            <div className="mt-3 border-t border-slate-100 pt-3">
+              <label className="flex items-start gap-2 text-xs text-slate-600">
+                <input type="checkbox" checked={contactOptIn} onChange={(e) => setContactOptIn(e.target.checked)} className="mt-0.5" />
+                <span>أوافق على أن يتواصل معي المستشفى بخصوص هذه الملاحظة فقط لإشعاري عند معالجتها (لن يُنشأ لي حساب دائم).</span>
+              </label>
+              {contactOptIn && (
+                <input
+                  value={contactPhone}
+                  onChange={(e) => setContactPhone(e.target.value)}
+                  placeholder="رقم الجوال للتواصل"
+                  className="mt-2 w-full rounded-xl border border-slate-200 p-2.5 text-sm focus:border-emerald-400 focus:outline-none"
+                />
+              )}
+            </div>
+          )}
         </div>
       </main>
 

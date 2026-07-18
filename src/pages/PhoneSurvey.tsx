@@ -28,6 +28,7 @@ export default function PhoneSurvey() {
   const [patientPhone, setPatientPhone] = useState('');
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [comment, setComment] = useState('');
+  const [contactOptIn, setContactOptIn] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -52,6 +53,7 @@ export default function PhoneSurvey() {
     setAnswers({});
     setComment('');
     setPatientPhone('');
+    setContactOptIn(false);
   };
 
   const submit = async () => {
@@ -69,7 +71,8 @@ export default function PhoneSurvey() {
         answers: Object.entries(answers)
           .filter(([questionId]) => visibleIds.has(questionId))
           .map(([questionId, value]) => ({ questionId, value })),
-        comment: comment.trim() || undefined
+        comment: comment.trim() || undefined,
+        contactOptIn: comment.trim() ? contactOptIn : undefined
       });
       setResult('تم تسجيل استبيان المريض بنجاح.');
       resetForm();
@@ -198,6 +201,12 @@ export default function PhoneSurvey() {
               className="w-full rounded-lg border border-slate-200 p-3 text-sm"
               placeholder="اكتب ما ذكره المريض..."
             />
+            {comment.trim() && (
+              <label className="mt-3 flex items-start gap-2 text-xs text-slate-600">
+                <input type="checkbox" checked={contactOptIn} onChange={(e) => setContactOptIn(e.target.checked)} className="mt-0.5" />
+                <span>المريض موافق على أن نتواصل معه على هذا الرقم لإشعاره عند معالجة ملاحظته (لا يُنشأ له حساب دائم).</span>
+              </label>
+            )}
           </div>
 
           <button

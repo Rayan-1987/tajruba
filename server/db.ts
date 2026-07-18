@@ -229,7 +229,13 @@ CREATE TABLE IF NOT EXISTS service_recovery_cases (
   opened_at TEXT NOT NULL DEFAULT (datetime('now')),
   closed_at TEXT,
   resolution_notes TEXT,
-  quality_approved_by TEXT REFERENCES users(id) ON DELETE SET NULL
+  quality_approved_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  -- Closed-loop contact: only populated when the patient explicitly opted in while leaving
+  -- their comment (a real phone number, unlike the irreversible hashes used for the sampling
+  -- frame elsewhere) — consent is scoped to this one case, never a persistent patient account.
+  patient_contact_opt_in INTEGER NOT NULL DEFAULT 0,
+  patient_contact_phone TEXT,
+  patient_notified_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_recovery_tenant ON service_recovery_cases(tenant_id);
 

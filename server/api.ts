@@ -27,7 +27,7 @@ import {
   type InstrumentItemValue
 } from './scoring.ts';
 import { DEFAULT_DEPARTMENTS, provisionTenantDefaults } from './provisioning.ts';
-import { composeInvitationMessage, createSmsProvider, type TenantSmsConfig } from './sms.ts';
+import { composeInvitationMessage, composeResolutionMessage, createSmsProvider, type TenantSmsConfig } from './sms.ts';
 import type { AnswerType, RecoveryStatus, Role, ServiceType } from './types.ts';
 
 function uid(): string {
@@ -207,7 +207,13 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       return;
     }
 
-    const body = req.body as { answers?: { questionId: string; value: number }[]; comment?: string; language?: string };
+    const body = req.body as {
+      answers?: { questionId: string; value: number }[];
+      comment?: string;
+      language?: string;
+      contactOptIn?: boolean;
+      contactPhone?: string;
+    };
     if (!Array.isArray(body.answers)) {
       res.status(400).json({ error: 'invalid_answers' });
       return;
@@ -260,10 +266,12 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         );
       }
       if (analysis.severity >= 3) {
+        const optIn = body.contactOptIn === true && !!body.contactPhone;
         db.prepare(
-          `INSERT INTO service_recovery_cases (id, comment_id, tenant_id, department_id, status, opened_at)
-           VALUES (?, ?, ?, ?, 'new', ?)`
-        ).run(uid(), commentId, invitation.tenant_id, invitation.department_id, submittedAt);
+          `INSERT INTO service_recovery_cases
+           (id, comment_id, tenant_id, department_id, status, opened_at, patient_contact_opt_in, patient_contact_phone)
+           VALUES (?, ?, ?, ?, 'new', ?, ?, ?)`
+        ).run(uid(), commentId, invitation.tenant_id, invitation.department_id, submittedAt, optIn ? 1 : 0, optIn ? body.contactPhone! : null);
       }
     }
 
@@ -1072,7 +1080,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     '/comments/:id/status',
     requireRole('QualityManager', 'DepartmentManager', 'SystemAdmin'),
     express.json({ limit: '8kb' }),
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       const { status, resolutionNotes } = req.body as { status?: RecoveryStatus; resolutionNotes?: string };
       const validStatuses: RecoveryStatus[] = ['new', 'assigned', 'in_progress', 'closed'];
       if (!status || !validStatuses.includes(status)) {
@@ -1096,10 +1104,11 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         return;
       }
 
-      const existingCase = db.prepare('SELECT id FROM service_recovery_cases WHERE comment_id = ?').get(comment.id) as
-        | { id: string }
-        | undefined;
+      const existingCase = db.prepare('SELECT id, patient_contact_opt_in, patient_contact_phone, patient_notified_at FROM service_recovery_cases WHERE comment_id = ?').get(
+        comment.id
+      ) as { id: string; patient_contact_opt_in: number; patient_contact_phone: string | null; patient_notified_at: string | null } | undefined;
 
+      let caseId = existingCase?.id;
       if (existingCase) {
         db.prepare(
           `UPDATE service_recovery_cases
@@ -1109,14 +1118,35 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
            WHERE id = ?`
         ).run(status, req.user!.id, resolutionNotes ?? null, status, status, req.user!.id, existingCase.id);
       } else {
+        caseId = uid();
         db.prepare(
           `INSERT INTO service_recovery_cases (id, comment_id, tenant_id, department_id, status, assigned_to, resolution_notes)
            VALUES (?, ?, ?, ?, ?, ?, ?)`
-        ).run(uid(), comment.id, comment.tenant_id, comment.department_id, status, req.user!.id, resolutionNotes ?? null);
+        ).run(caseId, comment.id, comment.tenant_id, comment.department_id, status, req.user!.id, resolutionNotes ?? null);
       }
 
       logAudit(db, req.user!.tenantId, req.user!.id, 'case_status_change', 'service_recovery_case', comment.id, { to: status });
-      res.json({ ok: true });
+
+      let patientNotified = false;
+      if (status === 'closed' && existingCase?.patient_contact_opt_in && existingCase.patient_contact_phone && !existingCase.patient_notified_at) {
+        const tenant = db.prepare('SELECT name_ar, name_en FROM tenants WHERE id = ?').get(req.user!.tenantId) as
+          | { name_ar: string; name_en: string }
+          | undefined;
+        const smsConfig = getTenantSmsConfig(db, req.user!.tenantId);
+        const provider = createSmsProvider(smsConfig);
+        const message = composeResolutionMessage(tenant?.name_ar ?? 'تجربة', tenant?.name_en ?? 'Tajruba', smsConfig.defaultLanguage);
+        const result = await provider.send(existingCase.patient_contact_phone, message);
+        if (result.ok) {
+          db.prepare("UPDATE service_recovery_cases SET patient_notified_at = datetime('now') WHERE id = ?").run(caseId!);
+          patientNotified = true;
+        }
+        logAudit(db, req.user!.tenantId, req.user!.id, 'patient_closure_notification_sent', 'service_recovery_case', caseId ?? null, {
+          ok: result.ok,
+          provider: provider.name
+        });
+      }
+
+      res.json({ ok: true, patientNotified });
     }
   );
 
@@ -1126,6 +1156,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     const rows = db
       .prepare(
         `SELECT src.id, src.comment_id, src.status, src.department_id, src.assigned_to, src.opened_at, src.closed_at, src.resolution_notes,
+                src.patient_contact_opt_in, src.patient_notified_at,
                 c.redacted_text, ca.severity, ca.category
          FROM service_recovery_cases src
          JOIN comments c ON c.id = src.comment_id
@@ -1308,6 +1339,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         patientPhone?: string;
         answers?: { questionId: string; value: number }[];
         comment?: string;
+        contactOptIn?: boolean;
       };
       if (!body.templateId || !body.departmentId || !body.patientPhone || !Array.isArray(body.answers)) {
         res.status(400).json({ error: 'invalid_payload' });
@@ -1383,10 +1415,12 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
           );
         }
         if (analysis.severity >= 3) {
+          const optIn = body.contactOptIn === true;
           db.prepare(
-            `INSERT INTO service_recovery_cases (id, comment_id, tenant_id, department_id, status, opened_at)
-             VALUES (?, ?, ?, ?, 'new', ?)`
-          ).run(uid(), commentId, req.user!.tenantId, body.departmentId, now);
+            `INSERT INTO service_recovery_cases
+             (id, comment_id, tenant_id, department_id, status, opened_at, patient_contact_opt_in, patient_contact_phone)
+             VALUES (?, ?, ?, ?, 'new', ?, ?, ?)`
+          ).run(uid(), commentId, req.user!.tenantId, body.departmentId, now, optIn ? 1 : 0, optIn ? body.patientPhone! : null);
         }
       }
 

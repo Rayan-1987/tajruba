@@ -84,3 +84,11 @@ export function composeInvitationMessage(templateNameAr: string, templateNameEn:
   }
   return `${templateNameAr}: نرجو مشاركتنا رأيك — ${surveyUrl}`;
 }
+
+/** Composes the closed-loop notification sent once a patient's service recovery case is resolved. */
+export function composeResolutionMessage(hospitalNameAr: string, hospitalNameEn: string, language: 'ar' | 'en'): string {
+  if (language === 'en') {
+    return `${hospitalNameEn}: thank you for your feedback. We have addressed your concern — we appreciate you helping us improve.`;
+  }
+  return `${hospitalNameAr}: شكرًا لتواصلك معنا، تم النظر في ملاحظتك ومعالجتها. نقدّر مساهمتك في تحسين الخدمة.`;
+}
