@@ -272,6 +272,119 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
   });
 
   // -------------------------------------------------------------------------
+  // QR / Kiosk survey channel — public, reusable code (no expiry, no single-use)
+  // -------------------------------------------------------------------------
+  router.get('/public/kiosk/:code', (req: Request, res: Response) => {
+    const kiosk = db
+      .prepare('SELECT id, tenant_id, template_id, department_id, active FROM kiosk_links WHERE code = ?')
+      .get(req.params.code) as { id: string; tenant_id: string; template_id: string; department_id: string; active: number } | undefined;
+    if (!kiosk || !kiosk.active) {
+      res.status(404).json({ error: 'kiosk_not_found' });
+      return;
+    }
+    const template = db
+      .prepare('SELECT name_ar, name_en, service_type FROM survey_templates WHERE id = ?')
+      .get(kiosk.template_id) as { name_ar: string; name_en: string; service_type: string };
+    const questions = db
+      .prepare(
+        `SELECT q.id, q.code, q.text_ar, q.text_en, q.answer_type, q.depends_on_code
+         FROM template_questions tq
+         JOIN questions q ON q.id = tq.question_id
+         WHERE tq.template_id = ? AND q.active = 1
+         ORDER BY tq.sort_order`
+      )
+      .all(kiosk.template_id) as {
+      id: string;
+      code: string;
+      text_ar: string;
+      text_en: string;
+      answer_type: string;
+      depends_on_code: string | null;
+    }[];
+    res.json({ templateName: template.name_ar, templateNameEn: template.name_en, serviceType: template.service_type, questions });
+  });
+
+  router.post('/public/kiosk/:code/submit', express.json({ limit: '64kb' }), (req: Request, res: Response) => {
+    const kiosk = db
+      .prepare(
+        'SELECT kl.id, kl.tenant_id, kl.template_id, kl.department_id, st.service_type FROM kiosk_links kl JOIN survey_templates st ON st.id = kl.template_id WHERE kl.code = ? AND kl.active = 1'
+      )
+      .get(req.params.code) as
+      | { id: string; tenant_id: string; template_id: string; department_id: string; service_type: string }
+      | undefined;
+    if (!kiosk) {
+      res.status(404).json({ error: 'kiosk_not_found' });
+      return;
+    }
+
+    const body = req.body as { answers?: { questionId: string; value: number }[]; comment?: string; language?: string };
+    if (!Array.isArray(body.answers)) {
+      res.status(400).json({ error: 'invalid_answers' });
+      return;
+    }
+
+    const validQuestionIds = new Set(
+      (
+        db
+          .prepare('SELECT q.id FROM template_questions tq JOIN questions q ON q.id = tq.question_id WHERE tq.template_id = ?')
+          .all(kiosk.template_id) as { id: string }[]
+      ).map((r) => r.id)
+    );
+
+    const now = new Date().toISOString();
+    const invitationId = uid();
+    const farFutureExpiry = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+    db.prepare(
+      `INSERT INTO survey_invitations
+       (id, tenant_id, template_id, department_id, service_type, token_hash, patient_phone_hash, channel, status, expires_at, sent_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'kiosk', 'completed', ?, ?, ?)`
+    ).run(invitationId, kiosk.tenant_id, kiosk.template_id, kiosk.department_id, kiosk.service_type, sha256(uid()), sha256(uid()), farFutureExpiry, now, now);
+
+    const responseId = uid();
+    db.prepare(
+      'INSERT INTO survey_responses (id, invitation_id, tenant_id, started_at, submitted_at, language, mode) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(responseId, invitationId, kiosk.tenant_id, now, now, body.language ?? 'ar', 'kiosk');
+
+    const insertAnswer = db.prepare('INSERT INTO answers (id, response_id, question_id, value_numeric) VALUES (?, ?, ?, ?)');
+    for (const answer of body.answers) {
+      if (!validQuestionIds.has(answer.questionId)) continue;
+      if (typeof answer.value !== 'number' || !Number.isFinite(answer.value)) continue;
+      insertAnswer.run(uid(), responseId, answer.questionId, answer.value);
+    }
+
+    if (body.comment && body.comment.trim().length > 0) {
+      const rawText = body.comment.trim().slice(0, 2000);
+      const redacted = redactPii(rawText);
+      const analyzer = createDefaultAnalyzer();
+      const analysis = analyzer.analyze(redacted);
+      const commentId = uid();
+      db.prepare(
+        'INSERT INTO comments (id, response_id, tenant_id, department_id, raw_text, redacted_text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run(commentId, responseId, kiosk.tenant_id, kiosk.department_id, rawText, redacted, now);
+      db.prepare(
+        'INSERT INTO comment_analyses (id, comment_id, sentiment, category, severity, analyzer) VALUES (?, ?, ?, ?, ?, ?)'
+      ).run(uid(), commentId, analysis.sentiment, analysis.category, analysis.severity, analysis.analyzer);
+      if (shouldAlert(analysis.severity)) {
+        db.prepare('INSERT INTO comment_alerts (id, comment_id, tenant_id, severity) VALUES (?, ?, ?, ?)').run(
+          uid(),
+          commentId,
+          kiosk.tenant_id,
+          analysis.severity
+        );
+      }
+      if (analysis.severity >= 3) {
+        db.prepare(
+          `INSERT INTO service_recovery_cases (id, comment_id, tenant_id, department_id, status, opened_at)
+           VALUES (?, ?, ?, ?, 'new', ?)`
+        ).run(uid(), commentId, kiosk.tenant_id, kiosk.department_id, now);
+      }
+    }
+
+    db.prepare('UPDATE kiosk_links SET response_count = response_count + 1 WHERE id = ?').run(kiosk.id);
+    res.status(201).json({ ok: true });
+  });
+
+  // -------------------------------------------------------------------------
   // Tenant (hospital) self-registration — public
   // -------------------------------------------------------------------------
   router.post('/tenants/register', express.json({ limit: '8kb' }), (req: Request, res: Response) => {
@@ -1109,6 +1222,78 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       res.status(201).json({ created, sent, skipped, smsProvider: provider.name });
     }
   );
+
+  // -------------------------------------------------------------------------
+  // QR / Kiosk links (admin management — the actual survey runs at /public/kiosk/:code)
+  // -------------------------------------------------------------------------
+  function generateKioskCode(): string {
+    return randomUUID().replace(/-/g, '').slice(0, 10);
+  }
+
+  router.get('/kiosk-links', requireRole('SystemAdmin', 'QualityManager'), (req: Request, res: Response) => {
+    const rows = db
+      .prepare(
+        `SELECT kl.id, kl.code, kl.label, kl.active, kl.response_count, kl.created_at,
+                d.name_ar as department_name_ar, st.name_ar as template_name_ar, st.service_type
+         FROM kiosk_links kl
+         JOIN departments d ON d.id = kl.department_id
+         JOIN survey_templates st ON st.id = kl.template_id
+         WHERE kl.tenant_id = ? ORDER BY kl.created_at DESC`
+      )
+      .all(req.user!.tenantId);
+    res.json({ kioskLinks: rows });
+  });
+
+  router.post('/kiosk-links', requireRole('SystemAdmin', 'QualityManager'), express.json({ limit: '8kb' }), (req: Request, res: Response) => {
+    const { departmentId, templateId, label } = req.body as { departmentId?: string; templateId?: string; label?: string };
+    if (!departmentId || !templateId) {
+      res.status(400).json({ error: 'invalid_payload' });
+      return;
+    }
+    const department = db.prepare('SELECT id FROM departments WHERE id = ? AND tenant_id = ?').get(departmentId, req.user!.tenantId);
+    const template = db.prepare('SELECT id FROM survey_templates WHERE id = ? AND tenant_id = ?').get(templateId, req.user!.tenantId);
+    if (!department || !template) {
+      res.status(404).json({ error: 'department_or_template_not_found' });
+      return;
+    }
+    const id = uid();
+    const code = generateKioskCode();
+    db.prepare('INSERT INTO kiosk_links (id, tenant_id, department_id, template_id, code, label, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+      id,
+      req.user!.tenantId,
+      departmentId,
+      templateId,
+      code,
+      label ?? null,
+      req.user!.id
+    );
+    logAudit(db, req.user!.tenantId, req.user!.id, 'kiosk_link_created', 'kiosk_link', id, { departmentId, templateId });
+    res.status(201).json({ id, code });
+  });
+
+  router.patch('/kiosk-links/:id', requireRole('SystemAdmin', 'QualityManager'), express.json({ limit: '8kb' }), (req: Request, res: Response) => {
+    const existing = db.prepare('SELECT id FROM kiosk_links WHERE id = ? AND tenant_id = ?').get(req.params.id, req.user!.tenantId);
+    if (!existing) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    const { active, label } = req.body as { active?: boolean; label?: string };
+    if (active !== undefined) db.prepare('UPDATE kiosk_links SET active = ? WHERE id = ?').run(active ? 1 : 0, req.params.id);
+    if (label !== undefined) db.prepare('UPDATE kiosk_links SET label = ? WHERE id = ?').run(label, req.params.id);
+    logAudit(db, req.user!.tenantId, req.user!.id, 'kiosk_link_updated', 'kiosk_link', req.params.id, req.body);
+    res.json({ ok: true });
+  });
+
+  router.delete('/kiosk-links/:id', requireRole('SystemAdmin', 'QualityManager'), (req: Request, res: Response) => {
+    const existing = db.prepare('SELECT id FROM kiosk_links WHERE id = ? AND tenant_id = ?').get(req.params.id, req.user!.tenantId);
+    if (!existing) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    db.prepare('UPDATE kiosk_links SET active = 0 WHERE id = ?').run(req.params.id);
+    logAudit(db, req.user!.tenantId, req.user!.id, 'kiosk_link_deactivated', 'kiosk_link', req.params.id, null);
+    res.json({ ok: true });
+  });
 
   // Staff-assisted phone survey: an agent conducts the survey over a phone call and
   // enters the patient's answers on their behalf.

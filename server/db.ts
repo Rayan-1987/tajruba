@@ -134,6 +134,25 @@ CREATE TABLE IF NOT EXISTS survey_invitations (
 CREATE INDEX IF NOT EXISTS idx_invitations_tenant ON survey_invitations(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_invitations_token ON survey_invitations(token_hash);
 
+-- QR / kiosk survey channel: a single reusable, non-expiring code (printed as a QR poster or
+-- shown on a tablet at a department) that any number of walk-up patients can use to submit an
+-- anonymous response. Unlike survey_invitations, one kiosk_links row is never "completed" —
+-- each submission creates its own fresh survey_invitations row (channel='kiosk').
+CREATE TABLE IF NOT EXISTS kiosk_links (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  department_id TEXT NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+  template_id TEXT NOT NULL REFERENCES survey_templates(id) ON DELETE CASCADE,
+  code TEXT NOT NULL UNIQUE,
+  label TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  response_count INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_kiosk_links_tenant ON kiosk_links(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_kiosk_links_code ON kiosk_links(code);
+
 -- Sampling frame: patients who must never be invited again (opt-out / complaint / deceased),
 -- keyed by the same irreversible phone hash used on survey_invitations (never raw phone numbers).
 CREATE TABLE IF NOT EXISTS do_not_contact_list (

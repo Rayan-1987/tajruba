@@ -15,8 +15,10 @@
     "verify": "npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
+    "@types/qrcode": "^1.5.6",
     "dotenv": "^16.4.5",
     "express": "^4.21.1",
+    "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0",

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api, ApiError } from '../api';
 import { SurveyQuestionCard, type SurveyQuestion } from '../components/SurveyQuestionCard';
@@ -10,25 +10,49 @@ interface SurveyPayload {
   questions: SurveyQuestion[];
 }
 
-export default function PatientSurvey() {
-  const { token = '' } = useParams();
+const RESET_AFTER_SECONDS = 8;
+
+export default function KioskSurvey() {
+  const { code = '' } = useParams();
   const [survey, setSurvey] = useState<SurveyPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [comment, setComment] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [countdown, setCountdown] = useState(RESET_AFTER_SECONDS);
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setError(null);
+    setSurvey(null);
     api
-      .get<SurveyPayload>(`/public/surveys/${token}`)
+      .get<SurveyPayload>(`/public/kiosk/${code}`)
       .then(setSurvey)
       .catch((e: unknown) => {
-        if (e instanceof ApiError && e.status === 410) setError('تم إكمال هذا الاستبيان مسبقًا أو انتهت صلاحيته.');
-        else if (e instanceof ApiError && e.status === 404) setError('رابط الاستبيان غير صحيح.');
+        if (e instanceof ApiError && e.status === 404) setError('رمز الجهاز غير صحيح أو تم إيقافه.');
         else setError('تعذر تحميل الاستبيان، حاول مرة أخرى.');
       });
-  }, [token]);
+  }, [code]);
+
+  useEffect(load, [load]);
+
+  // Kiosk devices run unattended, so after a submission we reset to a blank survey for the
+  // next patient automatically rather than showing a dead-end "thank you" screen forever.
+  useEffect(() => {
+    if (!submitted) return;
+    setCountdown(RESET_AFTER_SECONDS);
+    const interval = setInterval(() => setCountdown((prev) => prev - 1), 1000);
+    const timeout = setTimeout(() => {
+      setSubmitted(false);
+      setAnswers({});
+      setComment('');
+      load();
+    }, RESET_AFTER_SECONDS * 1000);
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, [submitted, load]);
 
   if (error) {
     return (
@@ -46,7 +70,8 @@ export default function PatientSurvey() {
         <div className="rounded-2xl bg-white p-8 text-center shadow-sm">
           <div className="mb-3 text-4xl">✓</div>
           <h1 className="mb-2 text-xl font-bold text-emerald-700">شكرًا لك</h1>
-          <p className="text-slate-600">وصلتنا ملاحظاتك وسيتم استخدامها لتحسين الخدمة المقدمة لك.</p>
+          <p className="text-slate-600">وصلتنا ملاحظاتك وسيتم استخدامها لتحسين الخدمة المقدمة.</p>
+          <p className="mt-4 text-xs text-slate-400">سيعود الجهاز جاهزًا للمريض التالي خلال {countdown} ثانية...</p>
         </div>
       </div>
     );
@@ -76,7 +101,7 @@ export default function PatientSurvey() {
     setSubmitting(true);
     try {
       const visibleIds = new Set(visibleQuestions.map((q) => q.id));
-      await api.post(`/public/surveys/${token}/submit`, {
+      await api.post(`/public/kiosk/${code}/submit`, {
         answers: Object.entries(answers)
           .filter(([questionId]) => visibleIds.has(questionId))
           .map(([questionId, value]) => ({ questionId, value })),
@@ -95,7 +120,7 @@ export default function PatientSurvey() {
     <div className="min-h-screen bg-slate-100 pb-24" dir="rtl">
       <header className="bg-white px-5 py-4 shadow-sm">
         <h1 className="text-lg font-bold text-slate-800">{survey.templateName}</h1>
-        <p className="text-sm text-slate-500">رأيك يساعدنا على تحسين تجربتك القادمة</p>
+        <p className="text-sm text-slate-500">شاركنا رأيك عن زيارتك اليوم</p>
         <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-200">
           <div
             className="h-full rounded-full bg-emerald-500 transition-all"
@@ -114,7 +139,6 @@ export default function PatientSurvey() {
             onSelectWithClear={(value) =>
               setAnswers((prev) => {
                 const next = { ...prev, [q.id]: value };
-                // Clear any follow-up answers that depended on this gate being "yes".
                 for (const other of survey.questions) {
                   if (other.depends_on_code === q.code) delete next[other.id];
                 }
