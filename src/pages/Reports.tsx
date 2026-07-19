@@ -98,7 +98,19 @@ interface DepartmentBreakdown {
   previousTopBoxPercent: number | null;
   changeVsPreviousPeriod: number | null;
   deviationVsOrgAverage: number | null;
+  percentileRank: number | null;
   trend: { period: string; topBoxPercent: number; n: number }[];
+}
+
+interface MoverItem {
+  id: string;
+  textAr: string;
+  isCustom: boolean;
+  domainNameAr: string;
+  n: number;
+  currentValue: number | null;
+  previousValue: number | null;
+  change: number | null;
 }
 
 interface ReportParameters {
@@ -131,6 +143,7 @@ export default function Reports() {
   });
   const [params, setParams] = useState<ReportParameters | null>(null);
   const [paramsExpanded, setParamsExpanded] = useState(false);
+  const [movers, setMovers] = useState<{ increases: MoverItem[]; declines: MoverItem[] }>({ increases: [], declines: [] });
 
   useEffect(() => {
     api.get<{ departments: Department[] }>('/departments').then((res) => setDepartments(res.departments));
@@ -155,6 +168,7 @@ export default function Reports() {
 
     if (serviceType) {
       api.get<{ items: PriorityItem[] }>(`/reports/priority-index?${scoreParams}`).then((res) => setPriorityItems(res.items));
+      api.get<{ increases: MoverItem[]; declines: MoverItem[] }>(`/reports/movers?${scoreParams}`).then(setMovers);
       if (user?.role !== 'DepartmentManager') {
         api
           .get<{ orgAverageTopBoxPercent: number | null; departments: DepartmentBreakdown[] }>(
@@ -166,6 +180,7 @@ export default function Reports() {
       }
     } else {
       setPriorityItems([]);
+      setMovers({ increases: [], declines: [] });
       setDeptBreakdown({ orgAverageTopBoxPercent: null, departments: [] });
     }
 
@@ -187,6 +202,13 @@ export default function Reports() {
     return `/dashboard/reports/print?${p}`;
   }, [serviceType, departmentId, period]);
 
+  const combinedPrintHref = useMemo(() => {
+    const p = new URLSearchParams();
+    p.set('services', Object.keys(SERVICE_LABELS_AR).join(','));
+    p.set('period', period);
+    return `/dashboard/reports/print?${p}`;
+  }, [period]);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -194,13 +216,22 @@ export default function Reports() {
           <h2 className="text-xl font-bold text-slate-800">تقارير تجربة المريض (PREMs)</h2>
           <p className="text-sm text-slate-500">المتوسط، نسبة Top Box، وفرق المعيار الإقليمي لكل محور وسؤال</p>
         </div>
-        <Link
-          to={printHref}
-          target="_blank"
-          className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-        >
-          طباعة / تصدير PDF
-        </Link>
+        <div className="flex gap-2">
+          <Link
+            to={printHref}
+            target="_blank"
+            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            طباعة / تصدير PDF
+          </Link>
+          <Link
+            to={combinedPrintHref}
+            target="_blank"
+            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            تقرير شامل لكل الخدمات
+          </Link>
+        </div>
       </div>
 
       {params && (
@@ -320,6 +351,8 @@ export default function Reports() {
       </div>
 
       {serviceType && <PriorityIndexCard items={priorityItems} />}
+
+      {serviceType && (movers.increases.length > 0 || movers.declines.length > 0) && <MoversSection movers={movers} />}
 
       {serviceType && user?.role !== 'DepartmentManager' && (
         <DepartmentsBreakdownSection data={deptBreakdown} />
@@ -509,6 +542,67 @@ function PriorityIndexCard({ items }: { items: PriorityItem[] }) {
   );
 }
 
+function MoverRow({ item }: { item: MoverItem }) {
+  return (
+    <tr className="border-b border-slate-50">
+      <td className="py-1.5 pe-2 text-slate-700">
+        {item.textAr}
+        {item.isCustom && ' †'}
+      </td>
+      <td className="py-1.5 pe-2 text-slate-500">{item.domainNameAr}</td>
+      <td className="py-1.5 pe-2 text-slate-500">{item.n}</td>
+      <td className="py-1.5 pe-2 text-slate-700">{item.currentValue?.toFixed(1) ?? '-'}</td>
+      <td className={`py-1.5 font-semibold ${(item.change ?? 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+        {item.change != null ? `${item.change >= 0 ? '+' : ''}${item.change}` : '-'}
+      </td>
+    </tr>
+  );
+}
+
+function MoversSection({ movers }: { movers: { increases: MoverItem[]; declines: MoverItem[] } }) {
+  const header = (
+    <tr className="border-b border-slate-100 text-slate-400">
+      <th className="py-1 pe-2 font-medium">السؤال</th>
+      <th className="py-1 pe-2 font-medium">المحور</th>
+      <th className="py-1 pe-2 font-medium">n</th>
+      <th className="py-1 pe-2 font-medium">النتيجة الحالية</th>
+      <th className="py-1 font-medium">التغيّر مقابل الفترة السابقة</th>
+    </tr>
+  );
+  return (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+      <div className="rounded-2xl bg-white p-4 shadow-sm">
+        <h3 className="mb-3 text-sm font-semibold text-emerald-700">أكبر التحسّنات</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-right text-xs">
+            <thead>{header}</thead>
+            <tbody>
+              {movers.increases.map((item) => (
+                <MoverRow key={item.id} item={item} />
+              ))}
+            </tbody>
+          </table>
+          {movers.increases.length === 0 && <p className="py-3 text-center text-slate-400">لا توجد بيانات كافية</p>}
+        </div>
+      </div>
+      <div className="rounded-2xl bg-white p-4 shadow-sm">
+        <h3 className="mb-3 text-sm font-semibold text-red-700">أكبر التراجعات</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-right text-xs">
+            <thead>{header}</thead>
+            <tbody>
+              {movers.declines.map((item) => (
+                <MoverRow key={item.id} item={item} />
+              ))}
+            </tbody>
+          </table>
+          {movers.declines.length === 0 && <p className="py-3 text-center text-slate-400">لا توجد بيانات كافية</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DepartmentsBreakdownSection({
   data
 }: {
@@ -566,6 +660,9 @@ function DepartmentsBreakdownSection({
                 <th className="py-1 pe-2 font-medium">النتيجة الحالية</th>
                 <th className="py-1 pe-2 font-medium">التغيّر</th>
                 <th className="py-1 pe-2 font-medium">الانحراف عن المتوسط</th>
+                <th className="py-1 pe-2 font-medium" title="الترتيب المئوي بين أقسام هذه الخدمة داخل المنشأة فقط، وليس مقابل بيانات خارجية">
+                  الترتيب المئوي الداخلي
+                </th>
                 <th className="py-1 font-medium">الاتجاه</th>
               </tr>
             </thead>
@@ -583,6 +680,7 @@ function DepartmentsBreakdownSection({
                   <td className={`py-1.5 pe-2 font-semibold ${(dept.deviationVsOrgAverage ?? 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                     {dept.deviationVsOrgAverage != null ? `${dept.deviationVsOrgAverage >= 0 ? '+' : ''}${dept.deviationVsOrgAverage}` : '-'}
                   </td>
+                  <td className="py-1.5 pe-2 text-slate-500">{dept.percentileRank != null ? `%${dept.percentileRank.toFixed(0)}` : '-'}</td>
                   <td className="py-1.5">
                     <MiniSparkline points={dept.trend.map((t) => t.topBoxPercent)} />
                   </td>

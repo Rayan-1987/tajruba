@@ -1782,7 +1782,76 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       };
     });
 
-    res.json({ orgAverageTopBoxPercent: orgAvg, smallSampleThreshold: SMALL_SAMPLE_THRESHOLD, departments: results });
+    // Internal percentile rank among this tenant's own departments for the same service line —
+    // NOT a percentile against an external peer-group database (we have no such live feed). The
+    // fraction of same-service departments this one is at or above, expressed as 0-100.
+    const scored = results.filter((r) => r.currentTopBoxPercent != null);
+    const withPercentile = results.map((r) => {
+      if (r.currentTopBoxPercent == null || scored.length <= 1) return { ...r, percentileRank: null as number | null };
+      const atOrBelow = scored.filter((o) => (o.currentTopBoxPercent as number) <= (r.currentTopBoxPercent as number)).length;
+      return { ...r, percentileRank: round2((atOrBelow / scored.length) * 100) };
+    });
+
+    res.json({ orgAverageTopBoxPercent: orgAvg, smallSampleThreshold: SMALL_SAMPLE_THRESHOLD, departments: withPercentile });
+  });
+
+  // Greatest movers: the questions with the largest positive/negative change vs the last rolling
+  // period, optionally scoped to one department — matches the "Greatest Increases"/"Greatest
+  // Declines" tables shown per-unit in external PREMs reports.
+  router.get('/reports/movers', (req: Request, res: Response) => {
+    const serviceType = req.query.serviceType as ServiceType | undefined;
+    const departmentId = req.query.departmentId as string | undefined;
+    if (!serviceType) {
+      res.status(400).json({ error: 'service_type_required' });
+      return;
+    }
+    if (req.user!.role === 'DepartmentManager' && departmentId && departmentId !== req.user!.departmentId) {
+      res.status(403).json({ error: 'forbidden' });
+      return;
+    }
+    const effectiveDeptId = req.user!.role === 'DepartmentManager' ? req.user!.departmentId : departmentId;
+    const windows = rollingWindows();
+
+    const questions = db
+      .prepare(
+        `SELECT q.id, q.code, q.text_ar, q.answer_type, q.is_custom, d.name_ar as domain_name_ar
+         FROM questions q JOIN question_domains d ON d.id = q.domain_id
+         WHERE q.tenant_id = ? AND q.service_type = ? AND q.active = 1`
+      )
+      .all(req.user!.tenantId, serviceType) as {
+      id: string;
+      code: string;
+      text_ar: string;
+      answer_type: AnswerType;
+      is_custom: number;
+      domain_name_ar: string;
+    }[];
+
+    const movers = questions
+      .map((q) => {
+        const curValues = fetchQuestionValues(req.user!.tenantId, q.id, effectiveDeptId, windows.curFrom, windows.curTo);
+        const prevValues = fetchQuestionValues(req.user!.tenantId, q.id, effectiveDeptId, windows.prevFrom, windows.prevTo);
+        const curMetric = primaryMetric(q.answer_type, curValues);
+        const prevMetric = primaryMetric(q.answer_type, prevValues);
+        const change = curMetric != null && prevMetric != null ? round2(curMetric - prevMetric) : null;
+        return {
+          id: q.id,
+          code: q.code,
+          textAr: q.text_ar,
+          isCustom: q.is_custom === 1,
+          domainNameAr: q.domain_name_ar,
+          n: curValues.length,
+          currentValue: curMetric,
+          previousValue: prevMetric,
+          change
+        };
+      })
+      .filter((m) => m.change != null);
+
+    const increases = [...movers].sort((a, b) => (b.change ?? 0) - (a.change ?? 0)).slice(0, 5);
+    const declines = [...movers].sort((a, b) => (a.change ?? 0) - (b.change ?? 0)).slice(0, 5);
+
+    res.json({ increases, declines });
   });
 
   // Report parameters/audit block: the filters, thresholds and facility scope in effect for

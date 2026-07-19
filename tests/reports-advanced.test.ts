@@ -202,17 +202,57 @@ test('reports/departments-breakdown compares departments within a service and is
     assert.equal(res.status, 200);
     const body = (await res.json()) as {
       orgAverageTopBoxPercent: number | null;
-      departments: { departmentId: string; n: number; currentTopBoxPercent: number | null; deviationVsOrgAverage: number | null }[];
+      departments: {
+        departmentId: string;
+        n: number;
+        currentTopBoxPercent: number | null;
+        deviationVsOrgAverage: number | null;
+        percentileRank: number | null;
+      }[];
     };
     const highRow = body.departments.find((d) => d.departmentId === highDept.id)!;
     const lowRow = body.departments.find((d) => d.departmentId === lowDept.id)!;
     assert.ok(highRow.n >= 60 && lowRow.n >= 60);
     assert.ok((highRow.currentTopBoxPercent ?? 0) > (lowRow.currentTopBoxPercent ?? 0), 'the consistently top-rated department scores higher');
     assert.ok((highRow.deviationVsOrgAverage ?? 0) > (lowRow.deviationVsOrgAverage ?? 0));
+    // Internal percentile rank (among this tenant's own IP departments) — the top-rated
+    // department must rank strictly above the lowest-rated one.
+    assert.ok(highRow.percentileRank != null && lowRow.percentileRank != null);
+    assert.ok(highRow.percentileRank! > lowRow.percentileRank!, 'the top department outranks the bottom one internally');
 
     const deptManagerCookie = await login(baseUrl, 'department@tajruba.sa', 'Department123!');
     const forbidden = await fetch(`${baseUrl}/api/reports/departments-breakdown?serviceType=IP`, { headers: { cookie: deptManagerCookie } });
     assert.equal(forbidden.status, 403, 'a DepartmentManager cannot compare across departments they do not manage');
+  } finally {
+    server.close();
+  }
+});
+
+test('reports/movers returns at most 5 greatest increases/declines, correctly ordered, and requires serviceType', async () => {
+  const { server, baseUrl } = await startServer();
+  try {
+    const adminCookie = await login(baseUrl, 'admin@tajruba.sa', 'Tajruba123!');
+
+    const missingService = await fetch(`${baseUrl}/api/reports/movers`, { headers: { cookie: adminCookie } });
+    assert.equal(missingService.status, 400);
+
+    const res = await fetch(`${baseUrl}/api/reports/movers?serviceType=ED`, { headers: { cookie: adminCookie } });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { increases: { change: number }[]; declines: { change: number }[] };
+    assert.ok(body.increases.length <= 5);
+    assert.ok(body.declines.length <= 5);
+    for (let i = 1; i < body.increases.length; i++) {
+      assert.ok(body.increases[i - 1].change >= body.increases[i].change, 'increases are sorted descending by change');
+    }
+    for (let i = 1; i < body.declines.length; i++) {
+      assert.ok(body.declines[i - 1].change <= body.declines[i].change, 'declines are sorted ascending by change');
+    }
+
+    const deptManagerCookie = await login(baseUrl, 'department@tajruba.sa', 'Department123!');
+    const forbidden = await fetch(`${baseUrl}/api/reports/movers?serviceType=ED&departmentId=some-other-department-id`, {
+      headers: { cookie: deptManagerCookie }
+    });
+    assert.equal(forbidden.status, 403, 'a DepartmentManager cannot request movers scoped to a department they do not manage');
   } finally {
     server.close();
   }
