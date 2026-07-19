@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { createServer as createViteServer } from 'vite';
 import { openDatabase } from './server/db.ts';
 import { seedDatabase } from './server/seed.ts';
-import { createApi } from './server/api.ts';
+import { createApi, autoSendDuePromsAssignments } from './server/api.ts';
 
 dotenv.config();
 
@@ -46,8 +46,24 @@ async function start() {
   }
 
   const server = app.listen(port, () => console.log(`Tajruba ready at http://localhost:${port}`));
+
+  // Periodically auto-send any due, free-to-administer PROMs assignments that have a contact
+  // phone on file, so follow-up questionnaires (e.g. week-6 pain score) go out without a staff
+  // member having to click "إرسال" manually every day.
+  const baseUrl = process.env.PUBLIC_BASE_URL ?? `http://localhost:${port}`;
+  const PROMS_AUTO_SEND_INTERVAL_MS = 60 * 60 * 1000;
+  const runAutoSend = () =>
+    autoSendDuePromsAssignments(db, baseUrl)
+      .then(({ sent, failed, skipped }) => {
+        if (sent || failed) console.log(`PROMs auto-send: sent=${sent} failed=${failed} skipped=${skipped}`);
+      })
+      .catch((error) => console.error('PROMs auto-send failed', error));
+  runAutoSend();
+  const autoSendTimer = setInterval(runAutoSend, PROMS_AUTO_SEND_INTERVAL_MS);
+
   const shutdown = () =>
     server.close(() => {
+      clearInterval(autoSendTimer);
       db.close();
       process.exit(0);
     });

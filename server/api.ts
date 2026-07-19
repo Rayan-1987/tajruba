@@ -123,6 +123,62 @@ function isEligibleForInvitation(db: Db, tenantId: string, phoneHash: string): {
   return { eligible: true };
 }
 
+// Auto-sends any assignment across all tenants that is due, free-to-administer, and has a
+// contact phone on file — the same eligibility rules as the manual "إرسال" button in
+// PromsMonitor. Licensed instruments and episodes without a phone number are left scheduled
+// for manual/clinical administration. Intended to be called on an interval from server.ts.
+export async function autoSendDuePromsAssignments(db: Db, baseUrl: string): Promise<{ sent: number; failed: number; skipped: number }> {
+  const rows = db
+    .prepare(
+      `SELECT pa.id, pe.tenant_id, pe.contact_phone, pi.name_ar as instrument_name_ar, pi.name_en as instrument_name_en,
+              pi.license_status, pt.name_ar as timepoint_name_ar
+       FROM prom_assignments pa
+       JOIN patient_episodes pe ON pe.id = pa.episode_id
+       JOIN proms_instruments pi ON pi.id = pa.instrument_id
+       JOIN pathway_timepoints pt ON pt.id = pa.timepoint_id
+       WHERE pa.status = 'scheduled' AND datetime(pa.due_date) <= datetime('now')`
+    )
+    .all() as {
+    id: string;
+    tenant_id: string;
+    contact_phone: string | null;
+    instrument_name_ar: string;
+    instrument_name_en: string;
+    license_status: string;
+    timepoint_name_ar: string;
+  }[];
+
+  let sent = 0;
+  let failed = 0;
+  let skipped = 0;
+  for (const assignment of rows) {
+    if (assignment.license_status !== 'free' || !assignment.contact_phone) {
+      skipped += 1;
+      continue;
+    }
+    const rawToken = uid();
+    const formUrl = `${baseUrl}/p/${rawToken}`;
+    const smsConfig = getTenantSmsConfig(db, assignment.tenant_id);
+    const provider = createSmsProvider(smsConfig);
+    const message = composePromsMessage(
+      assignment.instrument_name_ar,
+      assignment.instrument_name_en,
+      assignment.timepoint_name_ar,
+      formUrl,
+      smsConfig.defaultLanguage
+    );
+    const result = await provider.send(assignment.contact_phone, message);
+    db.prepare("UPDATE prom_assignments SET token_hash = ?, status = 'sent', sent_at = datetime('now') WHERE id = ?").run(
+      sha256(rawToken),
+      assignment.id
+    );
+    logAudit(db, assignment.tenant_id, null, 'proms_assignment_auto_sent', 'prom_assignment', assignment.id, { ok: result.ok });
+    if (result.ok) sent += 1;
+    else failed += 1;
+  }
+  return { sent, failed, skipped };
+}
+
 function departmentScopeFilter(req: Request, tableAlias: string): { clause: string; params: (string | number)[] } {
   if (req.user!.role === 'DepartmentManager' && req.user!.departmentId) {
     return { clause: `AND ${tableAlias}.department_id = ?`, params: [req.user!.departmentId] };
@@ -1822,7 +1878,6 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       res.json({ ok: true, sent: result.ok });
     }
   );
-
 
   // -------------------------------------------------------------------------
   // Settings: integrations (SMS/WhatsApp provider + HIS webhook)
