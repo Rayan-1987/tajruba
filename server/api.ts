@@ -713,6 +713,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     db.prepare(
       "UPDATE users SET password_hash = ?, password_reset_token_hash = NULL, password_reset_expires_at = NULL WHERE id = ?"
     ).run(hashPassword(newPassword), user.id);
+    // A password reset should invalidate any session a stolen/leaked cookie might still hold.
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
     logAudit(db, null, user.id, 'password_reset_completed', 'user', user.id, null);
     res.json({ ok: true });
   });
@@ -1340,6 +1342,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         return;
       }
       db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(password), req.params.id);
+      // Force the affected user to log in again with the new password on every device.
+      db.prepare('DELETE FROM sessions WHERE user_id = ?').run(req.params.id);
     }
     logAudit(db, req.user!.tenantId, req.user!.id, 'user_updated', 'user', req.params.id, { role, active, fullNameChanged: fullName !== undefined });
     res.json({ ok: true });
@@ -1996,9 +2000,11 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
   // PROMs
   // -------------------------------------------------------------------------
   router.get('/proms/instruments', (req: Request, res: Response) => {
+    const includeInactive = req.query.includeInactive === '1' && req.user!.role === 'SystemAdmin';
     const instruments = db
       .prepare(
-        'SELECT id, code, name_ar, name_en, license_status, description_ar, higher_is_better, mcid_threshold FROM proms_instruments WHERE tenant_id = ?'
+        `SELECT id, code, name_ar, name_en, license_status, description_ar, higher_is_better, mcid_threshold, active
+         FROM proms_instruments WHERE tenant_id = ? ${includeInactive ? '' : 'AND active = 1'}`
       )
       .all(req.user!.tenantId) as { id: string }[];
     const withItems = instruments.map((i) => ({
@@ -2057,13 +2063,14 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         res.status(404).json({ error: 'not_found' });
         return;
       }
-      const { nameAr, nameEn, licenseStatus, descriptionAr, higherIsBetter, mcidThreshold } = req.body as {
+      const { nameAr, nameEn, licenseStatus, descriptionAr, higherIsBetter, mcidThreshold, active } = req.body as {
         nameAr?: string;
         nameEn?: string;
         licenseStatus?: string;
         descriptionAr?: string;
         higherIsBetter?: boolean;
         mcidThreshold?: number;
+        active?: boolean;
       };
       if (nameAr !== undefined) db.prepare('UPDATE proms_instruments SET name_ar = ? WHERE id = ?').run(nameAr, req.params.id);
       if (nameEn !== undefined) db.prepare('UPDATE proms_instruments SET name_en = ? WHERE id = ?').run(nameEn, req.params.id);
@@ -2073,6 +2080,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       if (higherIsBetter !== undefined)
         db.prepare('UPDATE proms_instruments SET higher_is_better = ? WHERE id = ?').run(higherIsBetter ? 1 : 0, req.params.id);
       if (mcidThreshold !== undefined) db.prepare('UPDATE proms_instruments SET mcid_threshold = ? WHERE id = ?').run(mcidThreshold, req.params.id);
+      if (active !== undefined) db.prepare('UPDATE proms_instruments SET active = ? WHERE id = ?').run(active ? 1 : 0, req.params.id);
       logAudit(db, req.user!.tenantId, req.user!.id, 'instrument_updated', 'proms_instrument', req.params.id, req.body);
       res.json({ ok: true });
     }
@@ -2147,8 +2155,9 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
   );
 
   router.get('/proms/pathways', (req: Request, res: Response) => {
+    const includeInactive = req.query.includeInactive === '1' && req.user!.role === 'SystemAdmin';
     const pathways = db
-      .prepare('SELECT id, code, name_ar, name_en FROM care_pathways WHERE tenant_id = ?')
+      .prepare(`SELECT id, code, name_ar, name_en, active FROM care_pathways WHERE tenant_id = ? ${includeInactive ? '' : 'AND active = 1'}`)
       .all(req.user!.tenantId) as { id: string; code: string; name_ar: string; name_en: string }[];
     const withTimepoints = pathways.map((p) => ({
       ...p,
@@ -2197,9 +2206,10 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         res.status(404).json({ error: 'not_found' });
         return;
       }
-      const { nameAr, nameEn } = req.body as { nameAr?: string; nameEn?: string };
+      const { nameAr, nameEn, active } = req.body as { nameAr?: string; nameEn?: string; active?: boolean };
       if (nameAr !== undefined) db.prepare('UPDATE care_pathways SET name_ar = ? WHERE id = ?').run(nameAr, req.params.id);
       if (nameEn !== undefined) db.prepare('UPDATE care_pathways SET name_en = ? WHERE id = ?').run(nameEn, req.params.id);
+      if (active !== undefined) db.prepare('UPDATE care_pathways SET active = ? WHERE id = ?').run(active ? 1 : 0, req.params.id);
       logAudit(db, req.user!.tenantId, req.user!.id, 'pathway_updated', 'care_pathway', req.params.id, req.body);
       res.json({ ok: true });
     }
@@ -2363,8 +2373,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     if (contactPhone && consent !== true) {
       return { ok: false, error: 'consent_required' };
     }
-    const pathway = db.prepare('SELECT id FROM care_pathways WHERE id = ? AND tenant_id = ?').get(pathwayId, tenantId);
-    const department = db.prepare('SELECT id FROM departments WHERE id = ? AND tenant_id = ?').get(departmentId, tenantId);
+    const pathway = db.prepare('SELECT id FROM care_pathways WHERE id = ? AND tenant_id = ? AND active = 1').get(pathwayId, tenantId);
+    const department = db.prepare('SELECT id FROM departments WHERE id = ? AND tenant_id = ? AND active = 1').get(departmentId, tenantId);
     if (!pathway || !department) {
       return { ok: false, error: 'pathway_or_department_not_found' };
     }

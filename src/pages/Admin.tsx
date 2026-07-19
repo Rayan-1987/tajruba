@@ -638,6 +638,7 @@ interface Instrument {
   description_ar: string;
   higher_is_better: number;
   mcid_threshold: number;
+  active: number;
   items: InstrumentItem[];
 }
 
@@ -655,6 +656,7 @@ interface Pathway {
   code: string;
   name_ar: string;
   name_en: string;
+  active: number;
   timepoints: Timepoint[];
 }
 
@@ -666,10 +668,28 @@ function PromsConfigTab() {
   const [error, setError] = useState<string | null>(null);
 
   const load = () => {
-    api.get<{ instruments: Instrument[] }>('/proms/instruments').then((res) => setInstruments(res.instruments));
-    api.get<{ pathways: Pathway[] }>('/proms/pathways').then((res) => setPathways(res.pathways));
+    api.get<{ instruments: Instrument[] }>('/proms/instruments?includeInactive=1').then((res) => setInstruments(res.instruments));
+    api.get<{ pathways: Pathway[] }>('/proms/pathways?includeInactive=1').then((res) => setPathways(res.pathways));
   };
   useEffect(load, []);
+
+  const toggleInstrumentActive = async (i: Instrument) => {
+    try {
+      await api.patch(`/proms/instruments/${i.id}`, { active: !i.active });
+      load();
+    } catch {
+      setError('تعذر تغيير حالة المقياس.');
+    }
+  };
+
+  const togglePathwayActive = async (p: Pathway) => {
+    try {
+      await api.patch(`/proms/pathways/${p.id}`, { active: !p.active });
+      load();
+    } catch {
+      setError('تعذر تغيير حالة المسار.');
+    }
+  };
 
   // --- Instruments -----------------------------------------------------------
   const [iCode, setICode] = useState('');
@@ -716,19 +736,24 @@ function PromsConfigTab() {
   const saveEditInstrument = async (id: string) => {
     const edit = editingInstrument[id];
     if (!edit) return;
-    await api.patch(`/proms/instruments/${id}`, {
-      nameAr: edit.nameAr,
-      nameEn: edit.nameEn,
-      descriptionAr: edit.descriptionAr,
-      higherIsBetter: edit.higherIsBetter,
-      mcidThreshold: edit.mcidThreshold
-    });
-    setEditingInstrument((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-    load();
+    setError(null);
+    try {
+      await api.patch(`/proms/instruments/${id}`, {
+        nameAr: edit.nameAr,
+        nameEn: edit.nameEn,
+        descriptionAr: edit.descriptionAr,
+        higherIsBetter: edit.higherIsBetter,
+        mcidThreshold: edit.mcidThreshold
+      });
+      setEditingInstrument((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      load();
+    } catch {
+      setError('تعذر حفظ تعديلات المقياس.');
+    }
   };
 
   const [newItemDraft, setNewItemDraft] = useState<Record<string, { code: string; textAr: string; textEn: string; scaleMax: number; reverseScored: boolean }>>(
@@ -738,19 +763,24 @@ function PromsConfigTab() {
   const addItem = async (instrumentId: string) => {
     const draft = newItemDraft[instrumentId];
     if (!draft || !draft.code || !draft.textAr || !draft.textEn) return;
-    await api.post(`/proms/instruments/${instrumentId}/items`, {
-      code: draft.code,
-      textAr: draft.textAr,
-      textEn: draft.textEn,
-      scaleMax: draft.scaleMax || 1,
-      reverseScored: draft.reverseScored
-    });
-    setNewItemDraft((prev) => {
-      const next = { ...prev };
-      delete next[instrumentId];
-      return next;
-    });
-    load();
+    setError(null);
+    try {
+      await api.post(`/proms/instruments/${instrumentId}/items`, {
+        code: draft.code,
+        textAr: draft.textAr,
+        textEn: draft.textEn,
+        scaleMax: draft.scaleMax || 1,
+        reverseScored: draft.reverseScored
+      });
+      setNewItemDraft((prev) => {
+        const next = { ...prev };
+        delete next[instrumentId];
+        return next;
+      });
+      load();
+    } catch {
+      setError('تعذر إضافة العنصر — تحقق من عدم تكرار رمز العنصر داخل نفس المقياس.');
+    }
   };
 
   const [editingItem, setEditingItem] = useState<Record<string, { textAr: string; textEn: string; scaleMax: number; reverseScored: boolean }>>({});
@@ -764,18 +794,23 @@ function PromsConfigTab() {
   const saveEditItem = async (id: string) => {
     const edit = editingItem[id];
     if (!edit) return;
-    await api.patch(`/proms/instrument-items/${id}`, {
-      textAr: edit.textAr,
-      textEn: edit.textEn,
-      scaleMax: edit.scaleMax,
-      reverseScored: edit.reverseScored
-    });
-    setEditingItem((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-    load();
+    setError(null);
+    try {
+      await api.patch(`/proms/instrument-items/${id}`, {
+        textAr: edit.textAr,
+        textEn: edit.textEn,
+        scaleMax: edit.scaleMax,
+        reverseScored: edit.reverseScored
+      });
+      setEditingItem((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      load();
+    } catch {
+      setError('تعذر حفظ تعديلات العنصر.');
+    }
   };
 
   // --- Pathways ----------------------------------------------------------
@@ -804,13 +839,18 @@ function PromsConfigTab() {
   const saveEditPathway = async (id: string) => {
     const edit = editingPathway[id];
     if (!edit) return;
-    await api.patch(`/proms/pathways/${id}`, { nameAr: edit.nameAr, nameEn: edit.nameEn });
-    setEditingPathway((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-    load();
+    setError(null);
+    try {
+      await api.patch(`/proms/pathways/${id}`, { nameAr: edit.nameAr, nameEn: edit.nameEn });
+      setEditingPathway((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      load();
+    } catch {
+      setError('تعذر حفظ تعديلات المسار.');
+    }
   };
 
   const [newTimepointDraft, setNewTimepointDraft] = useState<
@@ -820,19 +860,24 @@ function PromsConfigTab() {
   const addTimepoint = async (pathwayId: string) => {
     const draft = newTimepointDraft[pathwayId];
     if (!draft || !draft.code || !draft.nameAr || draft.instrumentIds.length === 0) return;
-    await api.post(`/proms/pathways/${pathwayId}/timepoints`, {
-      code: draft.code,
-      nameAr: draft.nameAr,
-      offsetDays: draft.offsetDays,
-      windowDays: draft.windowDays || 14,
-      instrumentIds: draft.instrumentIds
-    });
-    setNewTimepointDraft((prev) => {
-      const next = { ...prev };
-      delete next[pathwayId];
-      return next;
-    });
-    load();
+    setError(null);
+    try {
+      await api.post(`/proms/pathways/${pathwayId}/timepoints`, {
+        code: draft.code,
+        nameAr: draft.nameAr,
+        offsetDays: draft.offsetDays,
+        windowDays: draft.windowDays || 14,
+        instrumentIds: draft.instrumentIds
+      });
+      setNewTimepointDraft((prev) => {
+        const next = { ...prev };
+        delete next[pathwayId];
+        return next;
+      });
+      load();
+    } catch {
+      setError('تعذر إضافة نقطة المتابعة.');
+    }
   };
 
   const [editingTimepoint, setEditingTimepoint] = useState<Record<string, { nameAr: string; offsetDays: number; windowDays: number; instrumentIds: string[] }>>(
@@ -848,18 +893,23 @@ function PromsConfigTab() {
   const saveEditTimepoint = async (id: string) => {
     const edit = editingTimepoint[id];
     if (!edit) return;
-    await api.patch(`/proms/timepoints/${id}`, {
-      nameAr: edit.nameAr,
-      offsetDays: edit.offsetDays,
-      windowDays: edit.windowDays,
-      instrumentIds: edit.instrumentIds
-    });
-    setEditingTimepoint((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-    load();
+    setError(null);
+    try {
+      await api.patch(`/proms/timepoints/${id}`, {
+        nameAr: edit.nameAr,
+        offsetDays: edit.offsetDays,
+        windowDays: edit.windowDays,
+        instrumentIds: edit.instrumentIds
+      });
+      setEditingTimepoint((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      load();
+    } catch {
+      setError('تعذر حفظ تعديلات نقطة المتابعة.');
+    }
   };
 
   const toggleInstrumentInList = (list: string[], id: string): string[] =>
@@ -909,12 +959,25 @@ function PromsConfigTab() {
         <div className="mt-3 space-y-2">
           {instruments.map((i) => (
             <div key={i.id} className="rounded-2xl bg-white p-4 shadow-sm">
-              <button type="button" onClick={() => setExpandedInstrument(expandedInstrument === i.id ? null : i.id)} className="flex w-full items-center justify-between text-right">
-                <span className="text-sm font-semibold text-slate-800">
-                  {i.name_ar} <span className="text-xs font-normal text-slate-400">({i.code}, {i.items.length} عنصر, {i.license_status === 'free' ? 'مجاني' : 'مرخّص'})</span>
-                </span>
-                <span className="text-xs text-slate-400">{expandedInstrument === i.id ? 'إغلاق' : 'تفاصيل'}</span>
-              </button>
+              <div className="flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => setExpandedInstrument(expandedInstrument === i.id ? null : i.id)}
+                  className="flex flex-1 items-center justify-between text-right"
+                >
+                  <span className={`text-sm font-semibold ${i.active ? 'text-slate-800' : 'text-slate-400 line-through'}`}>
+                    {i.name_ar} <span className="text-xs font-normal text-slate-400">({i.code}, {i.items.length} عنصر, {i.license_status === 'free' ? 'مجاني' : 'مرخّص'})</span>
+                  </span>
+                  <span className="text-xs text-slate-400">{expandedInstrument === i.id ? 'إغلاق' : 'تفاصيل'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => toggleInstrumentActive(i)}
+                  className="shrink-0 text-xs font-semibold text-red-600 hover:underline"
+                >
+                  {i.active ? 'إيقاف' : 'تفعيل'}
+                </button>
+              </div>
               {expandedInstrument === i.id && (
                 <div className="mt-3 space-y-3 border-t border-slate-100 pt-3">
                   {editingInstrument[i.id] ? (
@@ -1091,22 +1154,34 @@ function PromsConfigTab() {
                     </button>
                   </div>
                 ) : (
-                  <span className="text-sm font-semibold text-slate-800">
+                  <span className={`text-sm font-semibold ${p.active ? 'text-slate-800' : 'text-slate-400 line-through'}`}>
                     {p.name_ar} <span className="text-xs font-normal text-slate-400">({p.code}, {p.timepoints.length} نقطة متابعة)</span>
                   </span>
                 )}
                 <span className="flex shrink-0 items-center gap-3">
                   {!editingPathway[p.id] && (
-                    <span
-                      role="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        startEditPathway(p);
-                      }}
-                      className="text-xs font-semibold text-slate-600 hover:underline"
-                    >
-                      تعديل
-                    </span>
+                    <>
+                      <span
+                        role="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startEditPathway(p);
+                        }}
+                        className="text-xs font-semibold text-slate-600 hover:underline"
+                      >
+                        تعديل
+                      </span>
+                      <span
+                        role="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          togglePathwayActive(p);
+                        }}
+                        className="text-xs font-semibold text-red-600 hover:underline"
+                      >
+                        {p.active ? 'إيقاف' : 'تفعيل'}
+                      </span>
+                    </>
                   )}
                   <span className="text-xs text-slate-400">{expandedPathway === p.id ? 'إغلاق' : 'تفاصيل'}</span>
                 </span>

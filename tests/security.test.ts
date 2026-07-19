@@ -303,3 +303,61 @@ test('forgot-password never reveals whether an email address has an account', as
     db.close();
   }
 });
+
+test('a self-service password reset kills any session opened with the old password', async () => {
+  const { server, baseUrl, db } = await startServer();
+  try {
+    // A cookie obtained before the reset — e.g. a leaked/stolen session.
+    const staleCookie = await login(baseUrl, 'department@tajruba.sa', 'Department123!');
+    const stillWorksRes = await fetch(`${baseUrl}/api/auth/me`, { headers: { cookie: staleCookie } });
+    assert.equal(stillWorksRes.status, 200);
+
+    const user = db.prepare("SELECT id FROM users WHERE email = 'department@tajruba.sa'").get() as { id: string };
+    const crypto = await import('node:crypto');
+    const rawToken = 'session-kill-test-token';
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const farFuture = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    db.prepare('UPDATE users SET password_reset_token_hash = ?, password_reset_expires_at = ? WHERE id = ?').run(
+      tokenHash,
+      farFuture,
+      user.id
+    );
+    const resetRes = await fetch(`${baseUrl}/api/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: rawToken, newPassword: 'BrandNewPassword123!' })
+    });
+    assert.equal(resetRes.status, 200);
+
+    const staleCookieAfterReset = await fetch(`${baseUrl}/api/auth/me`, { headers: { cookie: staleCookie } });
+    assert.equal(staleCookieAfterReset.status, 401, 'the pre-reset session cookie must no longer authenticate');
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
+test('an admin forcing a new password on another user kills that user\'s existing sessions', async () => {
+  const { server, baseUrl } = await startServer();
+  try {
+    const adminCookie = await login(baseUrl, 'admin@tajruba.sa', 'Tajruba123!');
+    const staleCookie = await login(baseUrl, 'department@tajruba.sa', 'Department123!');
+
+    const users = (await (await fetch(`${baseUrl}/api/users`, { headers: { cookie: adminCookie } })).json()) as {
+      users: { id: string; email: string }[];
+    };
+    const targetUser = users.users.find((u) => u.email === 'department@tajruba.sa')!;
+
+    const patchRes = await fetch(`${baseUrl}/api/users/${targetUser.id}`, {
+      method: 'PATCH',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ password: 'AdminForcedPassword123!' })
+    });
+    assert.equal(patchRes.status, 200);
+
+    const staleCookieAfter = await fetch(`${baseUrl}/api/auth/me`, { headers: { cookie: staleCookie } });
+    assert.equal(staleCookieAfter.status, 401, 'the department manager session must be killed once the admin resets their password');
+  } finally {
+    server.close();
+  }
+});

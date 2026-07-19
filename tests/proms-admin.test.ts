@@ -221,3 +221,77 @@ test('a DepartmentManager cannot create or edit PROMs instruments, pathways, or 
     server.close();
   }
 });
+
+test('deactivating an instrument or pathway hides it from default listings and blocks new episodes, but reactivation restores both', async () => {
+  const { server, baseUrl } = await startServer();
+  try {
+    const adminCookie = await login(baseUrl, 'admin@tajruba.sa', 'Tajruba123!');
+
+    const pathwayRes = await fetch(`${baseUrl}/api/proms/pathways`, {
+      method: 'POST',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ code: 'RETIRE_ME', nameAr: 'مسار للإيقاف', nameEn: 'Pathway To Retire' })
+    });
+    const { id: pathwayId } = (await pathwayRes.json()) as { id: string };
+
+    const departments = (await (await fetch(`${baseUrl}/api/departments`, { headers: { cookie: adminCookie } })).json()) as {
+      departments: { id: string }[];
+    };
+    const deptId = departments.departments[0].id;
+
+    // Visible by default right after creation.
+    const listedBefore = (await (await fetch(`${baseUrl}/api/proms/pathways`, { headers: { cookie: adminCookie } })).json()) as {
+      pathways: { id: string }[];
+    };
+    assert.ok(listedBefore.pathways.some((p) => p.id === pathwayId));
+
+    const deactivateRes = await fetch(`${baseUrl}/api/proms/pathways/${pathwayId}`, {
+      method: 'PATCH',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ active: false })
+    });
+    assert.equal(deactivateRes.status, 200);
+
+    // Gone from the default (patient-facing / episode-creation) listing...
+    const listedAfter = (await (await fetch(`${baseUrl}/api/proms/pathways`, { headers: { cookie: adminCookie } })).json()) as {
+      pathways: { id: string }[];
+    };
+    assert.ok(!listedAfter.pathways.some((p) => p.id === pathwayId));
+
+    // ...but still visible to the admin management view via includeInactive=1.
+    const listedIncludingInactive = (await (
+      await fetch(`${baseUrl}/api/proms/pathways?includeInactive=1`, { headers: { cookie: adminCookie } })
+    ).json()) as { pathways: { id: string; active: number }[] };
+    const retired = listedIncludingInactive.pathways.find((p) => p.id === pathwayId);
+    assert.ok(retired);
+    assert.equal(retired!.active, 0);
+
+    // Creating a new episode against a deactivated pathway must be rejected.
+    const episodeRes = await fetch(`${baseUrl}/api/episodes`, {
+      method: 'POST',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        pathwayId,
+        departmentId: deptId,
+        patientRef: 'MRN-RETIRED-001',
+        startDate: new Date().toISOString().slice(0, 10)
+      })
+    });
+    assert.equal(episodeRes.status, 404);
+    const episodeBody = (await episodeRes.json()) as { error: string };
+    assert.equal(episodeBody.error, 'pathway_or_department_not_found');
+
+    // Reactivating restores it to the default listing.
+    await fetch(`${baseUrl}/api/proms/pathways/${pathwayId}`, {
+      method: 'PATCH',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ active: true })
+    });
+    const listedAfterReactivate = (await (await fetch(`${baseUrl}/api/proms/pathways`, { headers: { cookie: adminCookie } })).json()) as {
+      pathways: { id: string }[];
+    };
+    assert.ok(listedAfterReactivate.pathways.some((p) => p.id === pathwayId));
+  } finally {
+    server.close();
+  }
+});

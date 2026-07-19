@@ -268,6 +268,7 @@ CREATE TABLE IF NOT EXISTS proms_instruments (
   -- columns and use their coded definition instead (see resolveInstrumentDefinition in api.ts).
   higher_is_better INTEGER NOT NULL DEFAULT 0,
   mcid_threshold REAL NOT NULL DEFAULT 1,
+  active INTEGER NOT NULL DEFAULT 1,
   UNIQUE(tenant_id, code)
 );
 CREATE INDEX IF NOT EXISTS idx_instruments_tenant ON proms_instruments(tenant_id);
@@ -289,7 +290,8 @@ CREATE TABLE IF NOT EXISTS care_pathways (
   tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   code TEXT NOT NULL,
   name_ar TEXT NOT NULL,
-  name_en TEXT NOT NULL
+  name_en TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_pathways_tenant ON care_pathways(tenant_id);
 
