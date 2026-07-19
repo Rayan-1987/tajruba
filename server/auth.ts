@@ -33,6 +33,7 @@ export interface SessionUser {
   departmentId: string | null;
   fullName: string;
   email: string;
+  mfaEnabled: boolean;
 }
 
 interface UserRow {
@@ -43,6 +44,7 @@ interface UserRow {
   full_name: string;
   email: string;
   active: number;
+  mfa_enabled: number;
 }
 
 export function createSession(db: Db, userId: string): { token: string; expiresAt: string } {
@@ -99,7 +101,7 @@ function resolveSessionUser(db: Db, token: string): SessionUser | null {
     return null;
   }
   const user = db
-    .prepare('SELECT id, tenant_id, role, department_id, full_name, email, active FROM users WHERE id = ?')
+    .prepare('SELECT id, tenant_id, role, department_id, full_name, email, active, mfa_enabled FROM users WHERE id = ?')
     .get(session.user_id) as UserRow | undefined;
   if (!user || !user.active) return null;
   return {
@@ -108,7 +110,8 @@ function resolveSessionUser(db: Db, token: string): SessionUser | null {
     role: user.role,
     departmentId: user.department_id,
     fullName: user.full_name,
-    email: user.email
+    email: user.email,
+    mfaEnabled: user.mfa_enabled === 1
   };
 }
 

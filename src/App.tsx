@@ -5,6 +5,8 @@ import Login from './pages/Login';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
 import Register from './pages/Register';
+import TermsOfService from './pages/TermsOfService';
+import DataProcessingAgreement from './pages/DataProcessingAgreement';
 import PatientSurvey from './pages/PatientSurvey';
 import KioskSurvey from './pages/KioskSurvey';
 import PatientPromsForm from './pages/PatientPromsForm';
@@ -19,6 +21,7 @@ import SurveyStudio from './pages/SurveyStudio';
 import PhoneSurvey from './pages/PhoneSurvey';
 import DataCenter from './pages/DataCenter';
 import Settings from './pages/Settings';
+import Security from './pages/Security';
 import Admin from './pages/Admin';
 
 function ProtectedRoutes({ children }: { children: React.ReactNode }) {
@@ -63,6 +66,8 @@ export default function App() {
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password/:token" element={<ResetPassword />} />
       <Route path="/register" element={<Register />} />
+      <Route path="/terms" element={<TermsOfService />} />
+      <Route path="/data-processing-agreement" element={<DataProcessingAgreement />} />
       <Route path="/s/:token" element={<PatientSurvey />} />
       <Route path="/k/:code" element={<KioskSurvey />} />
       <Route path="/p/:token" element={<PatientPromsForm />} />
@@ -89,6 +94,7 @@ export default function App() {
         <Route path="service-recovery" element={<ServiceRecovery />} />
         <Route path="proms" element={<PromsMonitor />} />
         <Route path="phone-survey" element={<PhoneSurvey />} />
+        <Route path="security" element={<Security />} />
         <Route
           path="survey-studio"
           element={

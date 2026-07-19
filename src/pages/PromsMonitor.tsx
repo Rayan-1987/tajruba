@@ -42,7 +42,7 @@ interface DueAssignment {
   due_date: string;
   status: string;
   episode_id: string;
-  contact_phone: string | null;
+  has_contact_phone: number;
   surgeon_ref: string | null;
   timepoint_name_ar: string;
   instrument_name_ar: string;
@@ -348,7 +348,7 @@ function DueAssignmentsPanel({ refreshKey }: { refreshKey: number }) {
             </div>
             {a.license_status !== 'free' ? (
               <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">تتطلب تعبئة يدوية (أداة مرخّصة)</span>
-            ) : !a.contact_phone ? (
+            ) : !a.has_contact_phone ? (
               <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500">لا يوجد رقم جوال للحلقة</span>
             ) : (
               <button

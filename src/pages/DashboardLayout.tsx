@@ -13,7 +13,8 @@ const NAV_ITEMS: { to: string; label: string; roles?: Role[]; badgeKey?: 'commen
   { to: '/dashboard/survey-studio', label: 'استوديو الاستبيانات', roles: ['SystemAdmin', 'QualityManager'] },
   { to: '/dashboard/data-center', label: 'مركز البيانات', roles: ['SystemAdmin', 'QualityManager'] },
   { to: '/dashboard/admin', label: 'الإدارة', roles: ['SystemAdmin'] },
-  { to: '/dashboard/settings', label: 'الإعدادات', roles: ['SystemAdmin'] }
+  { to: '/dashboard/settings', label: 'الإعدادات', roles: ['SystemAdmin'] },
+  { to: '/dashboard/security', label: 'الأمان' }
 ];
 
 export default function DashboardLayout() {

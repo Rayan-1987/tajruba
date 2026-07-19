@@ -102,6 +102,16 @@ export default function Register() {
             تسجيل الدخول
           </Link>
         </p>
+        <p className="mt-4 text-center text-xs text-slate-400">
+          بإنشاء حساب فإنك توافق على{' '}
+          <Link to="/terms" className="hover:underline">
+            شروط الاستخدام
+          </Link>
+          {' و'}
+          <Link to="/data-processing-agreement" className="hover:underline">
+            اتفاقية معالجة البيانات
+          </Link>
+        </p>
       </div>
     </div>
   );

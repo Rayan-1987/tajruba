@@ -1,5 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
 import express, { Router, type Request, type Response } from 'express';
+import { rateLimit } from 'express-rate-limit';
 import type { Db } from './db.ts';
 import {
   attachSession,
@@ -39,6 +40,8 @@ import {
   type TenantSmsConfig
 } from './sms.ts';
 import { composePasswordResetEmail, createEmailProvider } from './email.ts';
+import { decryptPii, encryptPii } from './crypto.ts';
+import { buildEnrollmentQrCode, consumeRecoveryCode, createMfaSecret, generateRecoveryCodes, verifyMfaToken } from './mfa.ts';
 import type { AnswerType, RecoveryStatus, Role, ServiceType } from './types.ts';
 
 function uid(): string {
@@ -193,6 +196,7 @@ export async function autoSendDuePromsAssignments(
   }[];
 
   for (const assignment of dueRows) {
+    assignment.contact_phone = decryptPii(assignment.contact_phone);
     if (assignment.license_status !== 'free' || !assignment.contact_phone) {
       skipped += 1;
       continue;
@@ -244,6 +248,7 @@ export async function autoSendDuePromsAssignments(
   }[];
 
   for (const assignment of reminderRows) {
+    assignment.contact_phone = decryptPii(assignment.contact_phone);
     const dueTime = new Date(assignment.due_date).getTime();
     const windowMs = assignment.window_days * 24 * 60 * 60 * 1000;
     const elapsed = Date.now() - dueTime;
@@ -299,6 +304,58 @@ function departmentScopeFilter(req: Request, tableAlias: string): { clause: stri
 export function createApi(db: Db, _sessionSecret: string, root: string): Router {
   const router = Router();
   router.use(attachSession(db));
+
+  // Rate limiters for the endpoints most exposed to abuse: unauthenticated login/password-reset
+  // attempts (brute force) and public, token-less submission endpoints (spam/flooding). These
+  // are IP-scoped defense-in-depth on top of the app's own logic (token hashing, API-key
+  // checks). Created per createApi() call (one per running app, or one per test) so their
+  // in-memory counters never leak between independent app instances. If this app sits behind a
+  // reverse proxy/load balancer in production, `app.set('trust proxy', ...)` must be configured
+  // to match that topology so req.ip reflects the real client, not the proxy.
+  const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'too_many_attempts' }
+  });
+
+  const passwordResetLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    limit: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'too_many_attempts' }
+  });
+
+  const publicSubmitLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 100,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'too_many_requests' }
+  });
+
+  const webhookLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    limit: 120,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'too_many_requests' }
+  });
+
+  // Liveness/readiness probe for external uptime monitoring (UptimeRobot, a load balancer
+  // health check, etc.) — public, unauthenticated, deliberately not rate-limited since
+  // monitoring tools poll frequently by design. Confirms the process is up AND the database is
+  // actually reachable, not just that the HTTP server is listening.
+  router.get('/health', (_req: Request, res: Response) => {
+    try {
+      db.prepare('SELECT 1').get();
+      res.json({ status: 'ok', uptimeSeconds: Math.round(process.uptime()), timestamp: new Date().toISOString() });
+    } catch {
+      res.status(503).json({ status: 'error', uptimeSeconds: Math.round(process.uptime()), timestamp: new Date().toISOString() });
+    }
+  });
 
   // -------------------------------------------------------------------------
   // Public survey (token is the identity; no auth)
@@ -357,7 +414,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     });
   });
 
-  router.post('/public/surveys/:token/submit', express.json({ limit: '64kb' }), (req: Request, res: Response) => {
+  router.post('/public/surveys/:token/submit', publicSubmitLimiter, express.json({ limit: '64kb' }), (req: Request, res: Response) => {
     const tokenHash = sha256(req.params.token);
     const invitation = db
       .prepare(
@@ -442,7 +499,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
           `INSERT INTO service_recovery_cases
            (id, comment_id, tenant_id, department_id, status, opened_at, patient_contact_opt_in, patient_contact_phone)
            VALUES (?, ?, ?, ?, 'new', ?, ?, ?)`
-        ).run(uid(), commentId, invitation.tenant_id, invitation.department_id, submittedAt, optIn ? 1 : 0, optIn ? body.contactPhone! : null);
+        ).run(uid(), commentId, invitation.tenant_id, invitation.department_id, submittedAt, optIn ? 1 : 0, optIn ? encryptPii(body.contactPhone!) : null);
       }
     }
 
@@ -489,7 +546,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     });
   });
 
-  router.post('/public/kiosk/:code/submit', express.json({ limit: '64kb' }), (req: Request, res: Response) => {
+  router.post('/public/kiosk/:code/submit', publicSubmitLimiter, express.json({ limit: '64kb' }), (req: Request, res: Response) => {
     const kiosk = db
       .prepare(
         'SELECT kl.id, kl.tenant_id, kl.template_id, kl.department_id, st.service_type FROM kiosk_links kl JOIN survey_templates st ON st.id = kl.template_id WHERE kl.code = ? AND kl.active = 1'
@@ -640,29 +697,148 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
   // -------------------------------------------------------------------------
   // Auth
   // -------------------------------------------------------------------------
-  router.post('/auth/login', express.json({ limit: '8kb' }), (req: Request, res: Response) => {
+  const MFA_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+
+  router.post('/auth/login', loginLimiter, express.json({ limit: '8kb' }), (req: Request, res: Response) => {
     const { email, password } = req.body as { email?: string; password?: string };
     if (!email || !password) {
       res.status(400).json({ error: 'missing_credentials' });
       return;
     }
     const user = db
-      .prepare('SELECT id, password_hash, active FROM users WHERE email = ?')
-      .get(email.toLowerCase().trim()) as { id: string; password_hash: string; active: number } | undefined;
+      .prepare('SELECT id, password_hash, active, mfa_enabled FROM users WHERE email = ?')
+      .get(email.toLowerCase().trim()) as { id: string; password_hash: string; active: number; mfa_enabled: number } | undefined;
 
     if (!user || !user.active || !verifyPassword(password, user.password_hash)) {
       res.status(401).json({ error: 'invalid_credentials' });
       return;
     }
+
+    if (user.mfa_enabled) {
+      // Password verified, but the session isn't issued until the TOTP/recovery-code step
+      // passes — a stolen password alone is not enough to get in.
+      const rawChallenge = uid();
+      const expiresAt = new Date(Date.now() + MFA_CHALLENGE_TTL_MS).toISOString();
+      db.prepare('INSERT INTO mfa_challenges (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)').run(
+        uid(),
+        user.id,
+        sha256(rawChallenge),
+        expiresAt
+      );
+      res.json({ ok: true, mfaRequired: true, challengeToken: rawChallenge });
+      return;
+    }
+
     const { token, expiresAt } = createSession(db, user.id);
     setSessionCookie(res, token, expiresAt);
     logAudit(db, null, user.id, 'login', 'session', null, null);
+    res.json({ ok: true, mfaRequired: false });
+  });
+
+  router.post('/auth/mfa/verify-login', loginLimiter, express.json({ limit: '8kb' }), async (req: Request, res: Response) => {
+    const { challengeToken, code } = req.body as { challengeToken?: string; code?: string };
+    if (!challengeToken || !code) {
+      res.status(400).json({ error: 'invalid_payload' });
+      return;
+    }
+    const challenge = db
+      .prepare(
+        `SELECT id, user_id FROM mfa_challenges WHERE token_hash = ? AND datetime(expires_at) > datetime('now')`
+      )
+      .get(sha256(challengeToken)) as { id: string; user_id: string } | undefined;
+    if (!challenge) {
+      res.status(401).json({ error: 'challenge_expired_or_invalid' });
+      return;
+    }
+    const user = db
+      .prepare('SELECT id, active, mfa_secret_encrypted, mfa_recovery_codes_json FROM users WHERE id = ?')
+      .get(challenge.user_id) as
+      | { id: string; active: number; mfa_secret_encrypted: string | null; mfa_recovery_codes_json: string | null }
+      | undefined;
+    if (!user || !user.active || !user.mfa_secret_encrypted) {
+      res.status(401).json({ error: 'invalid_credentials' });
+      return;
+    }
+
+    const secret = decryptPii(user.mfa_secret_encrypted)!;
+    const codeIsValid = /^\d{6}$/.test(code) && (await verifyMfaToken(code, secret));
+    if (codeIsValid) {
+      db.prepare('DELETE FROM mfa_challenges WHERE id = ?').run(challenge.id);
+      const { token, expiresAt } = createSession(db, user.id);
+      setSessionCookie(res, token, expiresAt);
+      logAudit(db, null, user.id, 'login_mfa', 'session', null, null);
+      res.json({ ok: true });
+      return;
+    }
+    // Not a valid TOTP code — try it as a one-time recovery code instead.
+    const remaining = consumeRecoveryCode(user.mfa_recovery_codes_json, code);
+    if (remaining) {
+      db.prepare('UPDATE users SET mfa_recovery_codes_json = ? WHERE id = ?').run(JSON.stringify(remaining), user.id);
+      db.prepare('DELETE FROM mfa_challenges WHERE id = ?').run(challenge.id);
+      const { token, expiresAt } = createSession(db, user.id);
+      setSessionCookie(res, token, expiresAt);
+      logAudit(db, null, user.id, 'login_mfa_recovery_code', 'session', null, { remainingCodes: remaining.length });
+      res.json({ ok: true, recoveryCodeUsed: true, remainingRecoveryCodes: remaining.length });
+      return;
+    }
+    res.status(401).json({ error: 'invalid_code' });
+  });
+
+  router.post('/auth/mfa/enroll', requireAuth, async (req: Request, res: Response) => {
+    const secret = await createMfaSecret();
+    db.prepare('UPDATE users SET mfa_secret_encrypted = ?, mfa_enabled = 0, mfa_recovery_codes_json = NULL WHERE id = ?').run(
+      encryptPii(secret),
+      req.user!.id
+    );
+    const { otpauthUri, qrCodeDataUrl } = await buildEnrollmentQrCode(secret, req.user!.email);
+    res.json({ secret, otpauthUri, qrCodeDataUrl });
+  });
+
+  router.post('/auth/mfa/verify-enrollment', requireAuth, express.json({ limit: '4kb' }), async (req: Request, res: Response) => {
+    const { code } = req.body as { code?: string };
+    if (!code || !/^\d{6}$/.test(code)) {
+      res.status(400).json({ error: 'invalid_code' });
+      return;
+    }
+    const row = db.prepare('SELECT mfa_secret_encrypted FROM users WHERE id = ?').get(req.user!.id) as
+      | { mfa_secret_encrypted: string | null }
+      | undefined;
+    if (!row?.mfa_secret_encrypted) {
+      res.status(409).json({ error: 'no_pending_enrollment' });
+      return;
+    }
+    const secret = decryptPii(row.mfa_secret_encrypted)!;
+    const valid = await verifyMfaToken(code, secret);
+    if (!valid) {
+      res.status(400).json({ error: 'invalid_code' });
+      return;
+    }
+    const { rawCodes, hashedCodes } = generateRecoveryCodes();
+    db.prepare('UPDATE users SET mfa_enabled = 1, mfa_recovery_codes_json = ? WHERE id = ?').run(
+      JSON.stringify(hashedCodes),
+      req.user!.id
+    );
+    logAudit(db, req.user!.tenantId, req.user!.id, 'mfa_enabled', 'user', req.user!.id, null);
+    res.json({ ok: true, recoveryCodes: rawCodes });
+  });
+
+  router.post('/auth/mfa/disable', requireAuth, express.json({ limit: '4kb' }), (req: Request, res: Response) => {
+    const { password } = req.body as { password?: string };
+    const user = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.user!.id) as { password_hash: string } | undefined;
+    if (!password || !user || !verifyPassword(password, user.password_hash)) {
+      res.status(401).json({ error: 'invalid_password' });
+      return;
+    }
+    db.prepare('UPDATE users SET mfa_enabled = 0, mfa_secret_encrypted = NULL, mfa_recovery_codes_json = NULL WHERE id = ?').run(
+      req.user!.id
+    );
+    logAudit(db, req.user!.tenantId, req.user!.id, 'mfa_disabled', 'user', req.user!.id, null);
     res.json({ ok: true });
   });
 
   const PASSWORD_RESET_TTL_MS = 30 * 60 * 1000;
 
-  router.post('/auth/forgot-password', express.json({ limit: '8kb' }), async (req: Request, res: Response) => {
+  router.post('/auth/forgot-password', passwordResetLimiter, express.json({ limit: '8kb' }), async (req: Request, res: Response) => {
     const { email } = req.body as { email?: string };
     if (!email) {
       res.status(400).json({ error: 'email_required' });
@@ -692,7 +868,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     res.json({ ok: true });
   });
 
-  router.post('/auth/reset-password', express.json({ limit: '8kb' }), (req: Request, res: Response) => {
+  router.post('/auth/reset-password', passwordResetLimiter, express.json({ limit: '8kb' }), (req: Request, res: Response) => {
     const { token, newPassword } = req.body as { token?: string; newPassword?: string };
     if (!token || !newPassword) {
       res.status(400).json({ error: 'invalid_payload' });
@@ -735,7 +911,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
   // -------------------------------------------------------------------------
   // HIS/EMR webhook (public — authenticated via X-Api-Key, not a session)
   // -------------------------------------------------------------------------
-  router.post('/webhooks/invitations', express.json({ limit: '256kb' }), async (req: Request, res: Response) => {
+  router.post('/webhooks/invitations', webhookLimiter, express.json({ limit: '256kb' }), async (req: Request, res: Response) => {
     const apiKey = req.get('X-Api-Key');
     if (!apiKey) {
       res.status(401).json({ error: 'missing_api_key' });
@@ -818,7 +994,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
   // Same HIS integration key as /webhooks/invitations — lets the hospital's own system start
   // a PROMs care-pathway episode automatically (e.g. when a knee-replacement surgery is
   // documented), instead of a staff member re-keying it into the dashboard.
-  router.post('/webhooks/episodes', express.json({ limit: '8kb' }), (req: Request, res: Response) => {
+  router.post('/webhooks/episodes', webhookLimiter, express.json({ limit: '8kb' }), (req: Request, res: Response) => {
     const apiKey = req.get('X-Api-Key');
     if (!apiKey) {
       res.status(401).json({ error: 'missing_api_key' });
@@ -902,7 +1078,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     });
   });
 
-  router.post('/public/proms/:token/submit', express.json({ limit: '16kb' }), (req: Request, res: Response) => {
+  router.post('/public/proms/:token/submit', publicSubmitLimiter, express.json({ limit: '16kb' }), (req: Request, res: Response) => {
     const assignment = db
       .prepare(
         `SELECT pa.id, pa.episode_id, pa.timepoint_id, pa.instrument_id, pa.status, pa.due_date, pi.code as instrument_code,
@@ -1022,7 +1198,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
   // Patient-initiated withdrawal from a PROMs follow-up program — reachable from the opt-out
   // link included in every PROMs SMS. Cancels every remaining assignment on the episode so no
   // further follow-up messages go out, without requiring the patient to log in anywhere.
-  router.post('/public/proms/:token/opt-out', (req: Request, res: Response) => {
+  router.post('/public/proms/:token/opt-out', publicSubmitLimiter, (req: Request, res: Response) => {
     const assignment = db
       .prepare('SELECT pa.episode_id FROM prom_assignments pa WHERE pa.token_hash = ?')
       .get(sha256(req.params.token)) as { episode_id: string } | undefined;
@@ -2089,6 +2265,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       const existingCase = db.prepare('SELECT id, patient_contact_opt_in, patient_contact_phone, patient_notified_at FROM service_recovery_cases WHERE comment_id = ?').get(
         comment.id
       ) as { id: string; patient_contact_opt_in: number; patient_contact_phone: string | null; patient_notified_at: string | null } | undefined;
+      if (existingCase) existingCase.patient_contact_phone = decryptPii(existingCase.patient_contact_phone);
 
       let caseId = existingCase?.id;
       if (existingCase) {
@@ -2476,7 +2653,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
             `INSERT INTO service_recovery_cases
              (id, comment_id, tenant_id, department_id, status, opened_at, patient_contact_opt_in, patient_contact_phone)
              VALUES (?, ?, ?, ?, 'new', ?, ?, ?)`
-          ).run(uid(), commentId, req.user!.tenantId, body.departmentId, now, optIn ? 1 : 0, optIn ? body.patientPhone! : null);
+          ).run(uid(), commentId, req.user!.tenantId, body.departmentId, now, optIn ? 1 : 0, optIn ? encryptPii(body.patientPhone!) : null);
         }
       }
 
@@ -2877,7 +3054,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       pathwayId,
       departmentId,
       sha256(patientRef),
-      contactPhone ?? null,
+      contactPhone ? encryptPii(contactPhone) : null,
       surgeonRef ?? null,
       startDate,
       contactPhone ? new Date().toISOString() : null
@@ -2926,9 +3103,12 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     requireRole('SystemAdmin', 'QualityManager', 'DepartmentManager'),
     (req: Request, res: Response) => {
       const { clause, params } = departmentScopeFilter(req, 'pe');
+      // contact_phone is stored encrypted and is never sent to the client — only whether one is
+      // on file, which is all the due-assignments panel needs to decide what action to offer.
       const rows = db
         .prepare(
-          `SELECT pa.id, pa.due_date, pa.status, pe.id as episode_id, pe.contact_phone, pe.surgeon_ref,
+          `SELECT pa.id, pa.due_date, pa.status, pe.id as episode_id,
+                  CASE WHEN pe.contact_phone IS NOT NULL THEN 1 ELSE 0 END as has_contact_phone, pe.surgeon_ref,
                   pt.name_ar as timepoint_name_ar, pi.name_ar as instrument_name_ar, pi.license_status,
                   cp.name_ar as pathway_name_ar
            FROM prom_assignments pa
@@ -2977,6 +3157,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         res.status(404).json({ error: 'not_found' });
         return;
       }
+      assignment.contact_phone = decryptPii(assignment.contact_phone);
       if (req.user!.role === 'DepartmentManager' && assignment.department_id !== req.user!.departmentId) {
         res.status(403).json({ error: 'forbidden' });
         return;

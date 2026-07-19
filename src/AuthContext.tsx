@@ -5,7 +5,8 @@ import type { SessionUser } from './types';
 interface AuthState {
   user: SessionUser | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<{ mfaRequired: boolean; challengeToken?: string }>;
+  verifyMfa: (challengeToken: string, code: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -24,7 +25,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {
-    await api.post('/auth/login', { email, password });
+    const res = await api.post<{ ok: true; mfaRequired: boolean; challengeToken?: string }>('/auth/login', { email, password });
+    if (res.mfaRequired) {
+      return { mfaRequired: true, challengeToken: res.challengeToken };
+    }
+    const me = await api.get<{ user: SessionUser }>('/auth/me');
+    setUser(me.user);
+    return { mfaRequired: false };
+  }, []);
+
+  const verifyMfa = useCallback(async (challengeToken: string, code: string) => {
+    await api.post('/auth/mfa/verify-login', { challengeToken, code });
     const res = await api.get<{ user: SessionUser }>('/auth/me');
     setUser(res.user);
   }, []);
@@ -34,7 +45,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
-  return <AuthContext.Provider value={{ user, loading, login, logout }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, loading, login, verifyMfa, logout }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthState {

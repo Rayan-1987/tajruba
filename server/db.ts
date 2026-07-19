@@ -57,6 +57,13 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   password_reset_token_hash TEXT,
   password_reset_expires_at TEXT,
+  -- TOTP two-factor auth. mfa_secret_encrypted holds the pending OR active secret, encrypted at
+  -- rest (server/crypto.ts); mfa_enabled only flips to 1 once the user proves possession of the
+  -- authenticator app by verifying one code. Recovery codes are stored hashed (sha256), never
+  -- in the clear, one-time-use (removed from the JSON array as each is consumed).
+  mfa_secret_encrypted TEXT,
+  mfa_enabled INTEGER NOT NULL DEFAULT 0,
+  mfa_recovery_codes_json TEXT,
   UNIQUE(tenant_id, email)
 );
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
@@ -69,6 +76,18 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token_hash);
+
+-- A short-lived pending login after password verification but before the TOTP/recovery code
+-- step, for accounts with MFA enabled. No session cookie is issued until this second factor
+-- passes.
+CREATE TABLE IF NOT EXISTS mfa_challenges (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_mfa_challenges_token ON mfa_challenges(token_hash);
 
 CREATE TABLE IF NOT EXISTS question_domains (
   id TEXT PRIMARY KEY,
@@ -257,8 +276,10 @@ CREATE TABLE IF NOT EXISTS service_recovery_cases (
   resolution_notes TEXT,
   quality_approved_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   -- Closed-loop contact: only populated when the patient explicitly opted in while leaving
-  -- their comment (a real phone number, unlike the irreversible hashes used for the sampling
-  -- frame elsewhere) — consent is scoped to this one case, never a persistent patient account.
+  -- their comment (a real, reversible phone number, unlike the irreversible hashes used for the
+  -- sampling frame elsewhere) — consent is scoped to this one case, never a persistent patient
+  -- account. Encrypted at rest via server/crypto.ts (encryptPii/decryptPii), not stored in the
+  -- clear; decrypted only server-side when auto-notifying the patient on case closure.
   patient_contact_opt_in INTEGER NOT NULL DEFAULT 0,
   patient_contact_phone TEXT,
   patient_notified_at TEXT,
@@ -334,8 +355,9 @@ CREATE INDEX IF NOT EXISTS idx_timepoints_pathway ON pathway_timepoints(pathway_
 -- Unlike anonymous PREMs surveys, a PROMs episode is a formal, consented clinical follow-up
 -- program (e.g. a 12-month knee-replacement pathway) where the hospital already has an
 -- ongoing relationship with the patient — so, unlike survey_invitations.patient_phone_hash,
--- contact_phone is stored in the clear here to allow contacting the same patient repeatedly
--- across every timepoint in the pathway.
+-- contact_phone is a reversible value (encrypted at rest via server/crypto.ts, decrypted only
+-- server-side when sending) rather than an irreversible hash, to allow contacting the same
+-- patient repeatedly across every timepoint in the pathway.
 CREATE TABLE IF NOT EXISTS patient_episodes (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,

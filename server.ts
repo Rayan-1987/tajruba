@@ -22,6 +22,31 @@ async function start() {
 
   const app = express();
   app.disable('x-powered-by');
+
+  // Structured access log: one JSON line per request (method, path, status, duration), so an
+  // operator has something to watch/ship to a log aggregator. Skips /api/health to avoid
+  // flooding the log with routine monitoring polls.
+  app.use((req, res, next) => {
+    if (req.path === '/api/health') {
+      next();
+      return;
+    }
+    const startedAt = process.hrtime.bigint();
+    res.on('finish', () => {
+      const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+      console.log(
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          method: req.method,
+          path: req.path,
+          status: res.statusCode,
+          durationMs: Math.round(durationMs)
+        })
+      );
+    });
+    next();
+  });
+
   app.use(express.json({ limit: '256kb' }));
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');

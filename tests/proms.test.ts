@@ -5,6 +5,7 @@ import type { Server } from 'node:http';
 import { openDatabase } from '../server/db.ts';
 import { seedDatabase } from '../server/seed.ts';
 import { createApi, autoSendDuePromsAssignments } from '../server/api.ts';
+import { decryptPii } from '../server/crypto.ts';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -75,7 +76,10 @@ test('creating an episode auto-generates an assignment per timepoint x instrumen
     assert.equal(assignmentCount.n, pathway.timepoints.length, 'one assignment per timepoint (single-instrument pathway)');
 
     const episode = db.prepare('SELECT contact_phone FROM patient_episodes WHERE id = ?').get(episodeId) as { contact_phone: string };
-    assert.equal(episode.contact_phone, '0511112222');
+    // contact_phone is encrypted at rest (server/crypto.ts) — it must not equal the raw digits
+    // in the database, only after decryption.
+    assert.notEqual(episode.contact_phone, '0511112222');
+    assert.equal(decryptPii(episode.contact_phone), '0511112222');
   } finally {
     server.close();
     db.close();

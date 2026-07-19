@@ -57,6 +57,7 @@ export interface SessionUser {
   departmentId: string | null;
   fullName: string;
   email: string;
+  mfaEnabled: boolean;
 }
 
 export interface Department {
