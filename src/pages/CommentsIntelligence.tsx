@@ -14,6 +14,8 @@ interface CommentRow {
   case_id: string | null;
   case_status: string | null;
   resolution_notes: string | null;
+  alert_id: string | null;
+  alert_acknowledged: number | null;
 }
 
 const SEVERITY_COLORS: Record<number, string> = {
@@ -31,15 +33,22 @@ export default function CommentsIntelligence() {
   const [comments, setComments] = useState<CommentRow[]>([]);
   const [category, setCategory] = useState('');
   const [severityMin, setSeverityMin] = useState('');
+  const [unacknowledgedOnly, setUnacknowledgedOnly] = useState(false);
 
   const load = () => {
     const params = new URLSearchParams();
     if (category) params.set('category', category);
     if (severityMin) params.set('severityMin', severityMin);
+    if (unacknowledgedOnly) params.set('unacknowledgedOnly', 'true');
     api.get<{ comments: CommentRow[] }>(`/comments?${params}`).then((res) => setComments(res.comments));
   };
 
-  useEffect(load, [category, severityMin]);
+  useEffect(load, [category, severityMin, unacknowledgedOnly]);
+
+  const acknowledge = async (comment: CommentRow) => {
+    await api.post(`/comments/${comment.id}/acknowledge`, {});
+    load();
+  };
 
   const advance = async (comment: CommentRow) => {
     const status = comment.case_status ? NEXT_STATUS[comment.case_status] : 'assigned';
@@ -76,6 +85,10 @@ export default function CommentsIntelligence() {
             </option>
           ))}
         </select>
+        <label className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600">
+          <input type="checkbox" checked={unacknowledgedOnly} onChange={(e) => setUnacknowledgedOnly(e.target.checked)} />
+          التنبيهات غير المُطّلع عليها فقط
+        </label>
       </div>
 
       <div className="space-y-3">
@@ -90,19 +103,33 @@ export default function CommentsIntelligence() {
                   {STATUS_LABELS_AR[c.case_status]}
                 </span>
               )}
+              {c.alert_id && c.alert_acknowledged === 0 && (
+                <span className="rounded-full bg-red-600 px-2 py-0.5 text-xs font-semibold text-white">تنبيه غير مُطّلع عليه</span>
+              )}
               <span className="ms-auto text-xs text-slate-400">{new Date(c.created_at).toLocaleDateString('ar-SA')}</span>
             </div>
             <p className="mb-3 text-sm text-slate-700">{c.redacted_text}</p>
             {c.resolution_notes && <p className="mb-2 text-xs text-slate-500">ملاحظة الحل: {c.resolution_notes}</p>}
-            {c.case_status && c.case_status !== 'closed' && (
-              <button
-                type="button"
-                onClick={() => advance(c)}
-                className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
-              >
-                نقل إلى: {STATUS_LABELS_AR[NEXT_STATUS[c.case_status]]}
-              </button>
-            )}
+            <div className="flex flex-wrap gap-2">
+              {c.case_status && c.case_status !== 'closed' && (
+                <button
+                  type="button"
+                  onClick={() => advance(c)}
+                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                >
+                  نقل إلى: {STATUS_LABELS_AR[NEXT_STATUS[c.case_status]]}
+                </button>
+              )}
+              {c.alert_id && c.alert_acknowledged === 0 && (
+                <button
+                  type="button"
+                  onClick={() => acknowledge(c)}
+                  className="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50"
+                >
+                  تم الاطلاع
+                </button>
+              )}
+            </div>
           </div>
         ))}
         {comments.length === 0 && <p className="text-sm text-slate-400">لا توجد تعليقات مطابقة للفلاتر الحالية.</p>}

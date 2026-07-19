@@ -3,10 +3,40 @@ import { useParams } from 'react-router-dom';
 import { api, ApiError } from '../api';
 import { SurveyQuestionCard, type SurveyQuestion } from '../components/SurveyQuestionCard';
 
+const STRINGS = {
+  ar: {
+    subtitle: 'رأيك يساعدنا على تحسين تجربتك القادمة',
+    commentLabel: 'أي ملاحظات إضافية تود مشاركتها؟ (اختياري)',
+    commentPlaceholder: 'اكتب ملاحظتك هنا...',
+    optIn: 'أوافق على أن يتواصل معي المستشفى بخصوص هذه الملاحظة فقط لإشعاري عند معالجتها (لن يُنشأ لي حساب دائم).',
+    phonePlaceholder: 'رقم الجوال للتواصل',
+    submit: 'إرسال التقييم',
+    submitting: 'جارِ الإرسال...',
+    loading: 'جارِ التحميل...',
+    thanksTitle: 'شكرًا لك',
+    thanksBody: 'وصلتنا ملاحظاتك وسيتم استخدامها لتحسين الخدمة المقدمة لك.',
+    langToggle: 'English'
+  },
+  en: {
+    subtitle: 'Your feedback helps us improve your next visit',
+    commentLabel: 'Any additional feedback you would like to share? (optional)',
+    commentPlaceholder: 'Write your comment here...',
+    optIn: "I agree that the hospital may contact me about this comment only, to notify me once it's addressed (no permanent account is created).",
+    phonePlaceholder: 'Contact phone number',
+    submit: 'Submit',
+    submitting: 'Submitting...',
+    loading: 'Loading...',
+    thanksTitle: 'Thank you',
+    thanksBody: 'Your feedback was received and will be used to improve the service you receive.',
+    langToggle: 'العربية'
+  }
+} as const;
+
 interface SurveyPayload {
   templateName: string;
   templateNameEn: string;
   serviceType: string;
+  defaultLanguage: 'ar' | 'en';
   questions: SurveyQuestion[];
 }
 
@@ -14,6 +44,7 @@ export default function PatientSurvey() {
   const { token = '' } = useParams();
   const [survey, setSurvey] = useState<SurveyPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [language, setLanguage] = useState<'ar' | 'en'>('ar');
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [comment, setComment] = useState('');
   const [contactOptIn, setContactOptIn] = useState(false);
@@ -24,7 +55,10 @@ export default function PatientSurvey() {
   useEffect(() => {
     api
       .get<SurveyPayload>(`/public/surveys/${token}`)
-      .then(setSurvey)
+      .then((res) => {
+        setSurvey(res);
+        setLanguage(res.defaultLanguage ?? 'ar');
+      })
       .catch((e: unknown) => {
         if (e instanceof ApiError && e.status === 410) setError('تم إكمال هذا الاستبيان مسبقًا أو انتهت صلاحيته.');
         else if (e instanceof ApiError && e.status === 404) setError('رابط الاستبيان غير صحيح.');
@@ -43,12 +77,13 @@ export default function PatientSurvey() {
   }
 
   if (submitted) {
+    const t = STRINGS[language];
     return (
-      <div className="flex min-h-screen items-center justify-center bg-emerald-50 p-6" dir="rtl">
+      <div className="flex min-h-screen items-center justify-center bg-emerald-50 p-6" dir={language === 'en' ? 'ltr' : 'rtl'}>
         <div className="rounded-2xl bg-white p-8 text-center shadow-sm">
           <div className="mb-3 text-4xl">✓</div>
-          <h1 className="mb-2 text-xl font-bold text-emerald-700">شكرًا لك</h1>
-          <p className="text-slate-600">وصلتنا ملاحظاتك وسيتم استخدامها لتحسين الخدمة المقدمة لك.</p>
+          <h1 className="mb-2 text-xl font-bold text-emerald-700">{t.thanksTitle}</h1>
+          <p className="text-slate-600">{t.thanksBody}</p>
         </div>
       </div>
     );
@@ -56,8 +91,8 @@ export default function PatientSurvey() {
 
   if (!survey) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-100" dir="rtl">
-        <p className="text-slate-500">جارِ التحميل...</p>
+      <div className="flex min-h-screen items-center justify-center bg-slate-100" dir={language === 'en' ? 'ltr' : 'rtl'}>
+        <p className="text-slate-500">{STRINGS[language].loading}</p>
       </div>
     );
   }
@@ -84,7 +119,7 @@ export default function PatientSurvey() {
           .filter(([questionId]) => visibleIds.has(questionId))
           .map(([questionId, value]) => ({ questionId, value })),
         comment: comment.trim() || undefined,
-        language: 'ar',
+        language,
         contactOptIn: optIn || undefined,
         contactPhone: optIn ? contactPhone.trim() : undefined
       });
@@ -96,11 +131,24 @@ export default function PatientSurvey() {
     }
   };
 
+  const t = STRINGS[language];
+
   return (
-    <div className="min-h-screen bg-slate-100 pb-24" dir="rtl">
+    <div className="min-h-screen bg-slate-100 pb-24" dir={language === 'en' ? 'ltr' : 'rtl'}>
       <header className="bg-white px-5 py-4 shadow-sm">
-        <h1 className="text-lg font-bold text-slate-800">{survey.templateName}</h1>
-        <p className="text-sm text-slate-500">رأيك يساعدنا على تحسين تجربتك القادمة</p>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h1 className="text-lg font-bold text-slate-800">{language === 'en' ? survey.templateNameEn : survey.templateName}</h1>
+            <p className="text-sm text-slate-500">{t.subtitle}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setLanguage((l) => (l === 'ar' ? 'en' : 'ar'))}
+            className="shrink-0 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+          >
+            {t.langToggle}
+          </button>
+        </div>
         <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-200">
           <div
             className="h-full rounded-full bg-emerald-500 transition-all"
@@ -115,6 +163,7 @@ export default function PatientSurvey() {
             key={q.id}
             question={q}
             value={answers[q.id]}
+            language={language}
             onSelect={(value) => setAnswers((prev) => ({ ...prev, [q.id]: value }))}
             onSelectWithClear={(value) =>
               setAnswers((prev) => {
@@ -130,25 +179,25 @@ export default function PatientSurvey() {
         ))}
 
         <div className="rounded-2xl bg-white p-4 shadow-sm">
-          <p className="mb-2 font-medium text-slate-800">أي ملاحظات إضافية تود مشاركتها؟ (اختياري)</p>
+          <p className="mb-2 font-medium text-slate-800">{t.commentLabel}</p>
           <textarea
             value={comment}
             onChange={(e) => setComment(e.target.value)}
             rows={4}
             className="w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-emerald-400 focus:outline-none"
-            placeholder="اكتب ملاحظتك هنا..."
+            placeholder={t.commentPlaceholder}
           />
           {comment.trim() && (
             <div className="mt-3 border-t border-slate-100 pt-3">
               <label className="flex items-start gap-2 text-xs text-slate-600">
                 <input type="checkbox" checked={contactOptIn} onChange={(e) => setContactOptIn(e.target.checked)} className="mt-0.5" />
-                <span>أوافق على أن يتواصل معي المستشفى بخصوص هذه الملاحظة فقط لإشعاري عند معالجتها (لن يُنشأ لي حساب دائم).</span>
+                <span>{t.optIn}</span>
               </label>
               {contactOptIn && (
                 <input
                   value={contactPhone}
                   onChange={(e) => setContactPhone(e.target.value)}
-                  placeholder="رقم الجوال للتواصل"
+                  placeholder={t.phonePlaceholder}
                   className="mt-2 w-full rounded-xl border border-slate-200 p-2.5 text-sm focus:border-emerald-400 focus:outline-none"
                 />
               )}
@@ -164,7 +213,7 @@ export default function PatientSurvey() {
           onClick={submit}
           className="mx-auto block w-full max-w-xl rounded-xl bg-emerald-600 py-3 text-center font-semibold text-white transition disabled:cursor-not-allowed disabled:bg-slate-300"
         >
-          {submitting ? 'جارِ الإرسال...' : 'إرسال التقييم'}
+          {submitting ? t.submitting : t.submit}
         </button>
       </div>
     </div>

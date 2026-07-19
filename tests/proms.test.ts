@@ -4,7 +4,7 @@ import express from 'express';
 import type { Server } from 'node:http';
 import { openDatabase } from '../server/db.ts';
 import { seedDatabase } from '../server/seed.ts';
-import { createApi } from '../server/api.ts';
+import { createApi, autoSendDuePromsAssignments } from '../server/api.ts';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -63,6 +63,7 @@ test('creating an episode auto-generates an assignment per timepoint x instrumen
         departmentId: deptId,
         patientRef: 'MRN-TEST-001',
         contactPhone: '0511112222',
+        consent: true,
         surgeonRef: 'د. اختبار',
         startDate: new Date().toISOString().slice(0, 10)
       })
@@ -95,6 +96,7 @@ test('the baseline assignment appears in due-assignments and can be sent, genera
         departmentId: deptId,
         patientRef: 'MRN-TEST-002',
         contactPhone: '0511113333',
+        consent: true,
         startDate: new Date().toISOString().slice(0, 10)
       })
     });
@@ -151,6 +153,7 @@ test('the patient can complete a free instrument via the public link, and scorin
         departmentId: deptId,
         patientRef: 'MRN-TEST-003',
         contactPhone: '0511114444',
+        consent: true,
         startDate: new Date().toISOString().slice(0, 10)
       })
     });
@@ -286,6 +289,7 @@ test('the HIS webhook can create an episode using the same API key as invitation
         departmentId: deptId,
         patientRef: 'MRN-HIS-001',
         contactPhone: '0511116666',
+        consent: true,
         startDate: new Date().toISOString().slice(0, 10)
       })
     });
@@ -303,5 +307,197 @@ test('the HIS webhook can create an episode using the same API key as invitation
   } finally {
     server.close();
     db.close();
+  }
+});
+
+test('creating an episode with a contact phone but no explicit consent is rejected', async () => {
+  const { server, baseUrl, db } = await startServer();
+  try {
+    const adminCookie = await login(baseUrl, 'admin@tajruba.sa', 'Tajruba123!');
+    const { pathway, deptId } = await getKneePathwayAndDept(baseUrl, adminCookie);
+
+    const res = await fetch(`${baseUrl}/api/episodes`, {
+      method: 'POST',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        pathwayId: pathway.id,
+        departmentId: deptId,
+        patientRef: 'MRN-NOCONSENT-001',
+        contactPhone: '0511117777',
+        startDate: new Date().toISOString().slice(0, 10)
+        // consent intentionally omitted
+      })
+    });
+    assert.equal(res.status, 400);
+    const body = (await res.json()) as { error: string };
+    assert.equal(body.error, 'consent_required');
+
+    // An episode with no phone at all never needs consent (nothing to contact repeatedly).
+    const noPhoneRes = await fetch(`${baseUrl}/api/episodes`, {
+      method: 'POST',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        pathwayId: pathway.id,
+        departmentId: deptId,
+        patientRef: 'MRN-NOCONSENT-002',
+        startDate: new Date().toISOString().slice(0, 10)
+      })
+    });
+    assert.equal(noPhoneRes.status, 201);
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
+test('opting out cancels every remaining assignment on the episode and blocks the public form', async () => {
+  const { server, baseUrl, db } = await startServer();
+  try {
+    const adminCookie = await login(baseUrl, 'admin@tajruba.sa', 'Tajruba123!');
+    const { pathway, deptId } = await getKneePathwayAndDept(baseUrl, adminCookie);
+
+    const episodeRes = await fetch(`${baseUrl}/api/episodes`, {
+      method: 'POST',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        pathwayId: pathway.id,
+        departmentId: deptId,
+        patientRef: 'MRN-OPTOUT-001',
+        contactPhone: '0511118888',
+        consent: true,
+        startDate: new Date().toISOString().slice(0, 10)
+      })
+    });
+    const { id: episodeId } = (await episodeRes.json()) as { id: string };
+
+    const assignments = db.prepare('SELECT id FROM prom_assignments WHERE episode_id = ?').all(episodeId) as { id: string }[];
+    assert.ok(assignments.length >= 2, 'the knee pathway must schedule more than one assignment to make this test meaningful');
+
+    const crypto = await import('node:crypto');
+    const rawToken = 'opt-out-test-token';
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    db.prepare("UPDATE prom_assignments SET token_hash = ?, status = 'sent', sent_at = datetime('now') WHERE id = ?").run(
+      tokenHash,
+      assignments[0].id
+    );
+
+    const optOutRes = await fetch(`${baseUrl}/api/public/proms/${rawToken}/opt-out`, { method: 'POST' });
+    assert.equal(optOutRes.status, 200);
+
+    const episode = db.prepare('SELECT opted_out_at FROM patient_episodes WHERE id = ?').get(episodeId) as { opted_out_at: string | null };
+    assert.ok(episode.opted_out_at, 'the episode must be marked opted-out');
+
+    const remaining = db
+      .prepare("SELECT status FROM prom_assignments WHERE episode_id = ? AND id != ?")
+      .all(episodeId, assignments[0].id) as { status: string }[];
+    assert.ok(
+      remaining.every((r) => r.status === 'cancelled'),
+      'every other assignment on the episode must be cancelled'
+    );
+
+    // The link the patient just used to opt out must now also refuse to render the form.
+    const formRes = await fetch(`${baseUrl}/api/public/proms/${rawToken}`);
+    assert.equal(formRes.status, 410);
+    const formBody = (await formRes.json()) as { error: string };
+    assert.equal(formBody.error, 'opted_out');
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
+test('an assignment past its response window is treated as expired, live and via the background sweep', async () => {
+  const { server, baseUrl, db } = await startServer();
+  try {
+    const adminCookie = await login(baseUrl, 'admin@tajruba.sa', 'Tajruba123!');
+    const { pathway, deptId } = await getKneePathwayAndDept(baseUrl, adminCookie);
+
+    const episodeRes = await fetch(`${baseUrl}/api/episodes`, {
+      method: 'POST',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        pathwayId: pathway.id,
+        departmentId: deptId,
+        patientRef: 'MRN-EXPIRED-001',
+        contactPhone: '0511119999',
+        consent: true,
+        startDate: new Date().toISOString().slice(0, 10)
+      })
+    });
+    const { id: episodeId } = (await episodeRes.json()) as { id: string };
+    const assignment = db.prepare('SELECT id FROM prom_assignments WHERE episode_id = ? LIMIT 1').get(episodeId) as { id: string };
+
+    // BASELINE's window_days is 14 — push due_date 30 days into the past so it is well outside
+    // the window regardless of exactly when this test runs.
+    const longAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const crypto = await import('node:crypto');
+    const rawToken = 'expired-test-token';
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    db.prepare("UPDATE prom_assignments SET due_date = ?, status = 'sent', token_hash = ?, sent_at = datetime('now') WHERE id = ?").run(
+      longAgo,
+      tokenHash,
+      assignment.id
+    );
+
+    // Live check: the public GET must already refuse it even before any background sweep runs.
+    const formRes = await fetch(`${baseUrl}/api/public/proms/${rawToken}`);
+    assert.equal(formRes.status, 410);
+    const formBody = (await formRes.json()) as { error: string };
+    assert.equal(formBody.error, 'link_expired');
+
+    // Background sweep: must flip the row itself to 'expired' so dashboards/reports agree.
+    await autoSendDuePromsAssignments(db, baseUrl);
+    const row = db.prepare('SELECT status FROM prom_assignments WHERE id = ?').get(assignment.id) as { status: string };
+    assert.equal(row.status, 'expired');
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
+test('a department manager cannot create or view PROMs episodes outside their own department', async () => {
+  const { server, baseUrl } = await startServer();
+  try {
+    const adminCookie = await login(baseUrl, 'admin@tajruba.sa', 'Tajruba123!');
+    const { pathway, deptId: ipDeptId } = await getKneePathwayAndDept(baseUrl, adminCookie);
+
+    // department@tajruba.sa is seeded against the Emergency (ED) department, not the Inpatient
+    // (IP) department the knee-replacement pathway uses.
+    const deptCookie = await login(baseUrl, 'department@tajruba.sa', 'Department123!');
+
+    const createRes = await fetch(`${baseUrl}/api/episodes`, {
+      method: 'POST',
+      headers: { cookie: deptCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        pathwayId: pathway.id,
+        departmentId: ipDeptId,
+        patientRef: 'MRN-SCOPE-001',
+        startDate: new Date().toISOString().slice(0, 10)
+      })
+    });
+    assert.equal(createRes.status, 403, 'a department manager must not create episodes in another department');
+
+    // An admin-created episode in the IP department must not be visible to the ED manager.
+    const adminEpisodeRes = await fetch(`${baseUrl}/api/episodes`, {
+      method: 'POST',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        pathwayId: pathway.id,
+        departmentId: ipDeptId,
+        patientRef: 'MRN-SCOPE-002',
+        startDate: new Date().toISOString().slice(0, 10)
+      })
+    });
+    const { id: episodeId } = (await adminEpisodeRes.json()) as { id: string };
+
+    const outcomesRes = await fetch(`${baseUrl}/api/proms/outcomes?pathwayId=${pathway.id}`, { headers: { cookie: deptCookie } });
+    const outcomes = (await outcomesRes.json()) as { episodes: { id: string }[] };
+    assert.ok(!outcomes.episodes.some((e) => e.id === episodeId), 'the ED manager must not see an IP-department episode');
+
+    const dueRes = await fetch(`${baseUrl}/api/proms/due-assignments`, { headers: { cookie: deptCookie } });
+    const due = (await dueRes.json()) as { assignments: { episode_id: string }[] };
+    assert.ok(!due.assignments.some((a) => a.episode_id === episodeId), 'the ED manager must not see IP-department due assignments');
+  } finally {
+    server.close();
   }
 });

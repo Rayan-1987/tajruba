@@ -27,7 +27,14 @@ import {
   type InstrumentItemValue
 } from './scoring.ts';
 import { DEFAULT_DEPARTMENTS, provisionTenantDefaults } from './provisioning.ts';
-import { composeInvitationMessage, composePromsMessage, composeResolutionMessage, createSmsProvider, type TenantSmsConfig } from './sms.ts';
+import {
+  composeInvitationMessage,
+  composePromsMessage,
+  composePromsReminderMessage,
+  composeResolutionMessage,
+  createSmsProvider,
+  type TenantSmsConfig
+} from './sms.ts';
 import type { AnswerType, RecoveryStatus, Role, ServiceType } from './types.ts';
 
 function uid(): string {
@@ -40,6 +47,15 @@ function sha256(value: string): string {
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+// A PROMs link stays valid for `windowDays` after its due_date (the same window used to judge
+// whether a response still counts as "on time" for the timepoint) — after that it is treated as
+// expired rather than staying open indefinitely like the original bug allowed.
+function isPromsWindowExpired(dueDate: string, windowDays: number): boolean {
+  const expiry = new Date(dueDate);
+  expiry.setDate(expiry.getDate() + windowDays);
+  return Date.now() > expiry.getTime();
 }
 
 function logAudit(
@@ -123,12 +139,24 @@ function isEligibleForInvitation(db: Db, tenantId: string, phoneHash: string): {
   return { eligible: true };
 }
 
-// Auto-sends any assignment across all tenants that is due, free-to-administer, and has a
-// contact phone on file — the same eligibility rules as the manual "إرسال" button in
-// PromsMonitor. Licensed instruments and episodes without a phone number are left scheduled
-// for manual/clinical administration. Intended to be called on an interval from server.ts.
-export async function autoSendDuePromsAssignments(db: Db, baseUrl: string): Promise<{ sent: number; failed: number; skipped: number }> {
-  const rows = db
+// Auto-sends any assignment across all tenants that is due, free-to-administer, has a contact
+// phone on file, and whose patient hasn't opted out — the same eligibility rules as the manual
+// "إرسال" button in PromsMonitor. Licensed instruments and episodes without a phone number are
+// left scheduled for manual/clinical administration. Also sends a single reminder for
+// assignments sent but not completed halfway through their response window, and flips anything
+// past its full window (due_date + pathway_timepoints.window_days) to 'expired' so it stops
+// showing as actionable. Intended to be called on an interval from server.ts.
+export async function autoSendDuePromsAssignments(
+  db: Db,
+  baseUrl: string
+): Promise<{ sent: number; failed: number; skipped: number; reminded: number; expired: number }> {
+  let sent = 0;
+  let failed = 0;
+  let skipped = 0;
+  let reminded = 0;
+  let expired = 0;
+
+  const dueRows = db
     .prepare(
       `SELECT pa.id, pe.tenant_id, pe.contact_phone, pi.name_ar as instrument_name_ar, pi.name_en as instrument_name_en,
               pi.license_status, pt.name_ar as timepoint_name_ar
@@ -136,7 +164,7 @@ export async function autoSendDuePromsAssignments(db: Db, baseUrl: string): Prom
        JOIN patient_episodes pe ON pe.id = pa.episode_id
        JOIN proms_instruments pi ON pi.id = pa.instrument_id
        JOIN pathway_timepoints pt ON pt.id = pa.timepoint_id
-       WHERE pa.status = 'scheduled' AND datetime(pa.due_date) <= datetime('now')`
+       WHERE pa.status = 'scheduled' AND datetime(pa.due_date) <= datetime('now') AND pe.opted_out_at IS NULL`
     )
     .all() as {
     id: string;
@@ -148,16 +176,14 @@ export async function autoSendDuePromsAssignments(db: Db, baseUrl: string): Prom
     timepoint_name_ar: string;
   }[];
 
-  let sent = 0;
-  let failed = 0;
-  let skipped = 0;
-  for (const assignment of rows) {
+  for (const assignment of dueRows) {
     if (assignment.license_status !== 'free' || !assignment.contact_phone) {
       skipped += 1;
       continue;
     }
     const rawToken = uid();
     const formUrl = `${baseUrl}/p/${rawToken}`;
+    const optOutUrl = `${formUrl}/opt-out`;
     const smsConfig = getTenantSmsConfig(db, assignment.tenant_id);
     const provider = createSmsProvider(smsConfig);
     const message = composePromsMessage(
@@ -165,6 +191,7 @@ export async function autoSendDuePromsAssignments(db: Db, baseUrl: string): Prom
       assignment.instrument_name_en,
       assignment.timepoint_name_ar,
       formUrl,
+      optOutUrl,
       smsConfig.defaultLanguage
     );
     const result = await provider.send(assignment.contact_phone, message);
@@ -176,7 +203,74 @@ export async function autoSendDuePromsAssignments(db: Db, baseUrl: string): Prom
     if (result.ok) sent += 1;
     else failed += 1;
   }
-  return { sent, failed, skipped };
+
+  // Reminder: sent, not completed, past the halfway point of the response window, no reminder
+  // sent yet, still within the window (otherwise it's about to be expired below instead).
+  const reminderRows = db
+    .prepare(
+      `SELECT pa.id, pa.token_hash, pa.due_date, pe.tenant_id, pe.contact_phone, pi.name_ar as instrument_name_ar,
+              pi.name_en as instrument_name_en, pt.window_days
+       FROM prom_assignments pa
+       JOIN patient_episodes pe ON pe.id = pa.episode_id
+       JOIN proms_instruments pi ON pi.id = pa.instrument_id
+       JOIN pathway_timepoints pt ON pt.id = pa.timepoint_id
+       WHERE pa.status = 'sent' AND pa.reminder_sent_at IS NULL AND pa.token_hash IS NOT NULL AND pe.opted_out_at IS NULL`
+    )
+    .all() as {
+    id: string;
+    token_hash: string;
+    due_date: string;
+    tenant_id: string;
+    contact_phone: string | null;
+    instrument_name_ar: string;
+    instrument_name_en: string;
+    window_days: number;
+  }[];
+
+  for (const assignment of reminderRows) {
+    const dueTime = new Date(assignment.due_date).getTime();
+    const windowMs = assignment.window_days * 24 * 60 * 60 * 1000;
+    const elapsed = Date.now() - dueTime;
+    if (elapsed < windowMs / 2 || elapsed >= windowMs || !assignment.contact_phone) continue;
+
+    // The original raw token is never stored (only its hash, like every other token in this
+    // system), so it can't be re-sent — the reminder rotates in a fresh token and invalidates
+    // the original link rather than trying to recover it.
+    const rawToken = uid();
+    const formUrl = `${baseUrl}/p/${rawToken}`;
+    const optOutUrl = `${formUrl}/opt-out`;
+    const smsConfig = getTenantSmsConfig(db, assignment.tenant_id);
+    const provider = createSmsProvider(smsConfig);
+    const message = composePromsReminderMessage(
+      assignment.instrument_name_ar,
+      assignment.instrument_name_en,
+      formUrl,
+      optOutUrl,
+      smsConfig.defaultLanguage
+    );
+    const result = await provider.send(assignment.contact_phone, message);
+    db.prepare("UPDATE prom_assignments SET token_hash = ?, reminder_sent_at = datetime('now') WHERE id = ?").run(
+      sha256(rawToken),
+      assignment.id
+    );
+    if (result.ok) reminded += 1;
+    logAudit(db, assignment.tenant_id, null, 'proms_assignment_reminder_sent', 'prom_assignment', assignment.id, { ok: result.ok });
+  }
+
+  const expireResult = db
+    .prepare(
+      `UPDATE prom_assignments SET status = 'expired'
+       WHERE status IN ('scheduled', 'sent')
+         AND EXISTS (
+           SELECT 1 FROM pathway_timepoints pt
+           WHERE pt.id = prom_assignments.timepoint_id
+             AND datetime(prom_assignments.due_date, '+' || pt.window_days || ' days') < datetime('now')
+         )`
+    )
+    .run();
+  expired = Number(expireResult.changes);
+
+  return { sent, failed, skipped, reminded, expired };
 }
 
 function departmentScopeFilter(req: Request, tableAlias: string): { clause: string; params: (string | number)[] } {
@@ -242,6 +336,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       templateName: template.name_ar,
       templateNameEn: template.name_en,
       serviceType: invitation.service_type,
+      defaultLanguage: getTenantSmsConfig(db, invitation.tenant_id).defaultLanguage,
       questions
     });
   });
@@ -369,7 +464,13 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       answer_type: string;
       depends_on_code: string | null;
     }[];
-    res.json({ templateName: template.name_ar, templateNameEn: template.name_en, serviceType: template.service_type, questions });
+    res.json({
+      templateName: template.name_ar,
+      templateNameEn: template.name_en,
+      serviceType: template.service_type,
+      defaultLanguage: getTenantSmsConfig(db, kiosk.tenant_id).defaultLanguage,
+      questions
+    });
   });
 
   router.post('/public/kiosk/:code/submit', express.json({ limit: '64kb' }), (req: Request, res: Response) => {
@@ -670,63 +771,26 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
   router.get('/public/proms/:token', (req: Request, res: Response) => {
     const assignment = db
       .prepare(
-        `SELECT pa.id, pa.status, pa.instrument_id, pi.code as instrument_code, pi.name_ar as instrument_name_ar,
-                pi.name_en as instrument_name_en, pi.license_status
-         FROM prom_assignments pa JOIN proms_instruments pi ON pi.id = pa.instrument_id
-         WHERE pa.token_hash = ?`
-      )
-      .get(sha256(req.params.token)) as
-      | {
-          id: string;
-          status: string;
-          instrument_id: string;
-          instrument_code: string;
-          instrument_name_ar: string;
-          instrument_name_en: string;
-          license_status: string;
-        }
-      | undefined;
-    if (!assignment) {
-      res.status(404).json({ error: 'not_found' });
-      return;
-    }
-    if (assignment.license_status !== 'free') {
-      res.status(409).json({ error: 'instrument_requires_manual_administration' });
-      return;
-    }
-    if (assignment.status === 'completed') {
-      res.status(410).json({ error: 'already_completed' });
-      return;
-    }
-    const items = db
-      .prepare('SELECT code, text_ar, text_en, scale_max FROM proms_instrument_items WHERE instrument_id = ? ORDER BY sort_order')
-      .all(assignment.instrument_id) as { code: string; text_ar: string; text_en: string; scale_max: number }[];
-    res.json({
-      instrumentName: assignment.instrument_name_ar,
-      instrumentNameEn: assignment.instrument_name_en,
-      items: items.map((i) => ({ code: i.code, textAr: i.text_ar, textEn: i.text_en, scaleMax: i.scale_max }))
-    });
-  });
-
-  router.post('/public/proms/:token/submit', express.json({ limit: '16kb' }), (req: Request, res: Response) => {
-    const assignment = db
-      .prepare(
-        `SELECT pa.id, pa.episode_id, pa.timepoint_id, pa.instrument_id, pa.status, pi.code as instrument_code, pi.license_status,
-                pe.tenant_id
+        `SELECT pa.id, pa.status, pa.due_date, pa.instrument_id, pi.code as instrument_code, pi.name_ar as instrument_name_ar,
+                pi.name_en as instrument_name_en, pi.license_status, pt.window_days, pe.opted_out_at, pe.tenant_id
          FROM prom_assignments pa
          JOIN proms_instruments pi ON pi.id = pa.instrument_id
+         JOIN pathway_timepoints pt ON pt.id = pa.timepoint_id
          JOIN patient_episodes pe ON pe.id = pa.episode_id
          WHERE pa.token_hash = ?`
       )
       .get(sha256(req.params.token)) as
       | {
           id: string;
-          episode_id: string;
-          timepoint_id: string;
-          instrument_id: string;
           status: string;
+          due_date: string;
+          instrument_id: string;
           instrument_code: string;
+          instrument_name_ar: string;
+          instrument_name_en: string;
           license_status: string;
+          window_days: number;
+          opted_out_at: string | null;
           tenant_id: string;
         }
       | undefined;
@@ -738,8 +802,73 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       res.status(409).json({ error: 'instrument_requires_manual_administration' });
       return;
     }
+    if (assignment.opted_out_at) {
+      res.status(410).json({ error: 'opted_out' });
+      return;
+    }
     if (assignment.status === 'completed') {
       res.status(410).json({ error: 'already_completed' });
+      return;
+    }
+    if (assignment.status === 'expired' || isPromsWindowExpired(assignment.due_date, assignment.window_days)) {
+      res.status(410).json({ error: 'link_expired' });
+      return;
+    }
+    const items = db
+      .prepare('SELECT code, text_ar, text_en, scale_max FROM proms_instrument_items WHERE instrument_id = ? ORDER BY sort_order')
+      .all(assignment.instrument_id) as { code: string; text_ar: string; text_en: string; scale_max: number }[];
+    res.json({
+      instrumentName: assignment.instrument_name_ar,
+      instrumentNameEn: assignment.instrument_name_en,
+      defaultLanguage: getTenantSmsConfig(db, assignment.tenant_id).defaultLanguage,
+      items: items.map((i) => ({ code: i.code, textAr: i.text_ar, textEn: i.text_en, scaleMax: i.scale_max }))
+    });
+  });
+
+  router.post('/public/proms/:token/submit', express.json({ limit: '16kb' }), (req: Request, res: Response) => {
+    const assignment = db
+      .prepare(
+        `SELECT pa.id, pa.episode_id, pa.timepoint_id, pa.instrument_id, pa.status, pa.due_date, pi.code as instrument_code,
+                pi.license_status, pt.window_days, pe.tenant_id, pe.opted_out_at
+         FROM prom_assignments pa
+         JOIN proms_instruments pi ON pi.id = pa.instrument_id
+         JOIN pathway_timepoints pt ON pt.id = pa.timepoint_id
+         JOIN patient_episodes pe ON pe.id = pa.episode_id
+         WHERE pa.token_hash = ?`
+      )
+      .get(sha256(req.params.token)) as
+      | {
+          id: string;
+          episode_id: string;
+          timepoint_id: string;
+          instrument_id: string;
+          status: string;
+          due_date: string;
+          instrument_code: string;
+          license_status: string;
+          window_days: number;
+          tenant_id: string;
+          opted_out_at: string | null;
+        }
+      | undefined;
+    if (!assignment) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    if (assignment.license_status !== 'free') {
+      res.status(409).json({ error: 'instrument_requires_manual_administration' });
+      return;
+    }
+    if (assignment.opted_out_at) {
+      res.status(410).json({ error: 'opted_out' });
+      return;
+    }
+    if (assignment.status === 'completed') {
+      res.status(410).json({ error: 'already_completed' });
+      return;
+    }
+    if (assignment.status === 'expired' || isPromsWindowExpired(assignment.due_date, assignment.window_days)) {
+      res.status(410).json({ error: 'link_expired' });
       return;
     }
 
@@ -813,6 +942,24 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     db.prepare("UPDATE prom_assignments SET status = 'completed' WHERE id = ?").run(assignment.id);
 
     res.status(201).json({ ok: true, raw: result.raw, band: result.band, delta: result.delta, mcidMet: result.mcidMet });
+  });
+
+  // Patient-initiated withdrawal from a PROMs follow-up program — reachable from the opt-out
+  // link included in every PROMs SMS. Cancels every remaining assignment on the episode so no
+  // further follow-up messages go out, without requiring the patient to log in anywhere.
+  router.post('/public/proms/:token/opt-out', (req: Request, res: Response) => {
+    const assignment = db
+      .prepare('SELECT pa.episode_id FROM prom_assignments pa WHERE pa.token_hash = ?')
+      .get(sha256(req.params.token)) as { episode_id: string } | undefined;
+    if (!assignment) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    db.prepare("UPDATE patient_episodes SET opted_out_at = COALESCE(opted_out_at, datetime('now')) WHERE id = ?").run(assignment.episode_id);
+    db.prepare("UPDATE prom_assignments SET status = 'cancelled' WHERE episode_id = ? AND status IN ('scheduled', 'sent')").run(
+      assignment.episode_id
+    );
+    res.json({ ok: true });
   });
 
   router.use(requireAuth);
@@ -1292,18 +1439,22 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     const { clause, params } = departmentScopeFilter(req, 'c');
     const category = req.query.category as string | undefined;
     const severityMin = req.query.severityMin ? Number(req.query.severityMin) : undefined;
+    const unacknowledgedOnly = req.query.unacknowledgedOnly === 'true';
 
     const rows = db
       .prepare(
         `SELECT c.id, c.department_id, c.redacted_text, c.created_at,
                 ca.sentiment, ca.category, ca.severity,
-                src.id as case_id, src.status as case_status, src.assigned_to, src.resolution_notes
+                src.id as case_id, src.status as case_status, src.assigned_to, src.resolution_notes,
+                al.id as alert_id, al.acknowledged as alert_acknowledged
          FROM comments c
          JOIN comment_analyses ca ON ca.comment_id = c.id
          LEFT JOIN service_recovery_cases src ON src.comment_id = c.id
+         LEFT JOIN comment_alerts al ON al.comment_id = c.id
          WHERE c.tenant_id = ? ${clause}
          ${category ? 'AND ca.category = ?' : ''}
          ${severityMin !== undefined ? 'AND ca.severity >= ?' : ''}
+         ${unacknowledgedOnly ? "AND al.id IS NOT NULL AND al.acknowledged = 0" : ''}
          ORDER BY c.created_at DESC
          LIMIT 200`
       )
@@ -1312,6 +1463,51 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       );
     res.json({ comments: rows });
   });
+
+  router.post(
+    '/comments/:id/acknowledge',
+    requireRole('SystemAdmin', 'QualityManager', 'DepartmentManager'),
+    (req: Request, res: Response) => {
+      const comment = db.prepare('SELECT id, tenant_id, department_id FROM comments WHERE id = ?').get(req.params.id) as
+        | { id: string; tenant_id: string; department_id: string }
+        | undefined;
+      if (!comment || comment.tenant_id !== req.user!.tenantId) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      if (req.user!.role === 'DepartmentManager' && comment.department_id !== req.user!.departmentId) {
+        res.status(403).json({ error: 'forbidden' });
+        return;
+      }
+      db.prepare('UPDATE comment_alerts SET acknowledged = 1 WHERE comment_id = ?').run(comment.id);
+      logAudit(db, req.user!.tenantId, req.user!.id, 'comment_alert_acknowledged', 'comment', comment.id, null);
+      res.json({ ok: true });
+    }
+  );
+
+  router.get(
+    '/alerts/summary',
+    requireRole('SystemAdmin', 'QualityManager', 'DepartmentManager'),
+    (req: Request, res: Response) => {
+      const commentScope = departmentScopeFilter(req, 'c');
+      const caseScope = departmentScopeFilter(req, 'src');
+      const unacknowledgedComments = (
+        db
+          .prepare(
+            `SELECT COUNT(*) as n FROM comment_alerts al
+             JOIN comments c ON c.id = al.comment_id
+             WHERE c.tenant_id = ? ${commentScope.clause} AND al.acknowledged = 0`
+          )
+          .get(req.user!.tenantId, ...commentScope.params) as { n: number }
+      ).n;
+      const openCases = (
+        db
+          .prepare(`SELECT COUNT(*) as n FROM service_recovery_cases src WHERE src.tenant_id = ? ${caseScope.clause} AND src.status = 'new'`)
+          .get(req.user!.tenantId, ...caseScope.params) as { n: number }
+      ).n;
+      res.json({ unacknowledgedComments, openCases });
+    }
+  );
 
   router.patch(
     '/comments/:id/status',
@@ -1392,18 +1588,77 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     const status = req.query.status as string | undefined;
     const rows = db
       .prepare(
-        `SELECT src.id, src.comment_id, src.status, src.department_id, src.assigned_to, src.opened_at, src.closed_at, src.resolution_notes,
+        `SELECT src.id, src.comment_id, src.status, src.department_id, src.assigned_to, src.due_at, src.opened_at, src.closed_at, src.resolution_notes,
                 src.patient_contact_opt_in, src.patient_notified_at,
+                u.full_name as assigned_to_name,
                 c.redacted_text, ca.severity, ca.category
          FROM service_recovery_cases src
          JOIN comments c ON c.id = src.comment_id
          JOIN comment_analyses ca ON ca.comment_id = c.id
+         LEFT JOIN users u ON u.id = src.assigned_to
          WHERE src.tenant_id = ? ${clause} ${status ? 'AND src.status = ?' : ''}
          ORDER BY src.opened_at DESC`
       )
       .all(...[req.user!.tenantId, ...params, ...(status ? [status] : [])]);
     res.json({ cases: rows });
   });
+
+  // Lightweight staff picker for assigning a recovery case — deliberately narrower than the
+  // full /users admin endpoint (SystemAdmin-only) so a QualityManager/DepartmentManager can
+  // see who to assign without full user-management access.
+  router.get(
+    '/service-recovery/assignable-users',
+    requireRole('SystemAdmin', 'QualityManager', 'DepartmentManager'),
+    (req: Request, res: Response) => {
+      const departmentId = req.query.departmentId as string | undefined;
+      if (req.user!.role === 'DepartmentManager' && departmentId !== req.user!.departmentId) {
+        res.status(403).json({ error: 'forbidden' });
+        return;
+      }
+      const rows = db
+        .prepare(
+          `SELECT id, full_name, role FROM users
+           WHERE tenant_id = ? AND active = 1 AND (department_id = ? OR role IN ('QualityManager', 'SystemAdmin'))
+           ORDER BY full_name`
+        )
+        .all(req.user!.tenantId, departmentId ?? null);
+      res.json({ users: rows });
+    }
+  );
+
+  router.patch(
+    '/service-recovery/cases/:id/assign',
+    requireRole('SystemAdmin', 'QualityManager', 'DepartmentManager'),
+    express.json({ limit: '8kb' }),
+    (req: Request, res: Response) => {
+      const existing = db.prepare('SELECT id, tenant_id, department_id FROM service_recovery_cases WHERE id = ?').get(req.params.id) as
+        | { id: string; tenant_id: string; department_id: string }
+        | undefined;
+      if (!existing || existing.tenant_id !== req.user!.tenantId) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      if (req.user!.role === 'DepartmentManager' && existing.department_id !== req.user!.departmentId) {
+        res.status(403).json({ error: 'forbidden' });
+        return;
+      }
+      const { assignedTo, dueAt } = req.body as { assignedTo?: string; dueAt?: string };
+      if (assignedTo) {
+        const assignee = db.prepare('SELECT id FROM users WHERE id = ? AND tenant_id = ? AND active = 1').get(assignedTo, req.user!.tenantId);
+        if (!assignee) {
+          res.status(400).json({ error: 'invalid_assignee' });
+          return;
+        }
+      }
+      db.prepare('UPDATE service_recovery_cases SET assigned_to = COALESCE(?, assigned_to), due_at = COALESCE(?, due_at) WHERE id = ?').run(
+        assignedTo ?? null,
+        dueAt ?? null,
+        existing.id
+      );
+      logAudit(db, req.user!.tenantId, req.user!.id, 'case_assigned', 'service_recovery_case', existing.id, { assignedTo, dueAt });
+      res.json({ ok: true });
+    }
+  );
 
   // -------------------------------------------------------------------------
   // Invitations
@@ -1701,9 +1956,10 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       return;
     }
 
+    const { clause, params } = departmentScopeFilter(req, 'patient_episodes');
     const episodes = db
-      .prepare('SELECT id, patient_ref_hash, surgeon_ref, start_date, status FROM patient_episodes WHERE pathway_id = ?')
-      .all(pathwayId) as { id: string; patient_ref_hash: string; surgeon_ref: string; start_date: string; status: string }[];
+      .prepare(`SELECT id, patient_ref_hash, surgeon_ref, start_date, status FROM patient_episodes WHERE pathway_id = ? ${clause}`)
+      .all(pathwayId, ...params) as { id: string; patient_ref_hash: string; surgeon_ref: string; start_date: string; status: string }[];
 
     const episodeResults = episodes.map((episode) => {
       const scores = db
@@ -1741,11 +1997,25 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
   function createEpisode(
     db: Db,
     tenantId: string,
-    body: { pathwayId?: string; departmentId?: string; patientRef?: string; contactPhone?: string; surgeonRef?: string; startDate?: string }
+    body: {
+      pathwayId?: string;
+      departmentId?: string;
+      patientRef?: string;
+      contactPhone?: string;
+      surgeonRef?: string;
+      startDate?: string;
+      consent?: boolean;
+    }
   ): { ok: true; id: string } | { ok: false; error: string } {
-    const { pathwayId, departmentId, patientRef, contactPhone, surgeonRef, startDate } = body;
+    const { pathwayId, departmentId, patientRef, contactPhone, surgeonRef, startDate, consent } = body;
     if (!pathwayId || !departmentId || !patientRef || !startDate) {
       return { ok: false, error: 'invalid_payload' };
+    }
+    // A phone number means the patient will be contacted repeatedly over the life of the
+    // pathway (up to 12 months) using their raw, unhashed number — that requires their
+    // explicit consent to be captured up front, not assumed.
+    if (contactPhone && consent !== true) {
+      return { ok: false, error: 'consent_required' };
     }
     const pathway = db.prepare('SELECT id FROM care_pathways WHERE id = ? AND tenant_id = ?').get(pathwayId, tenantId);
     const department = db.prepare('SELECT id FROM departments WHERE id = ? AND tenant_id = ?').get(departmentId, tenantId);
@@ -1754,9 +2024,19 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     }
     const episodeId = uid();
     db.prepare(
-      `INSERT INTO patient_episodes (id, tenant_id, pathway_id, department_id, patient_ref_hash, contact_phone, surgeon_ref, start_date, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')`
-    ).run(episodeId, tenantId, pathwayId, departmentId, sha256(patientRef), contactPhone ?? null, surgeonRef ?? null, startDate);
+      `INSERT INTO patient_episodes (id, tenant_id, pathway_id, department_id, patient_ref_hash, contact_phone, surgeon_ref, start_date, status, consent_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`
+    ).run(
+      episodeId,
+      tenantId,
+      pathwayId,
+      departmentId,
+      sha256(patientRef),
+      contactPhone ?? null,
+      surgeonRef ?? null,
+      startDate,
+      contactPhone ? new Date().toISOString() : null
+    );
 
     const timepoints = db
       .prepare('SELECT id, offset_days, instrument_ids_json FROM pathway_timepoints WHERE pathway_id = ?')
@@ -1781,9 +2061,14 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     requireRole('SystemAdmin', 'QualityManager', 'DepartmentManager'),
     express.json({ limit: '8kb' }),
     (req: Request, res: Response) => {
+      if (req.user!.role === 'DepartmentManager' && req.body?.departmentId !== req.user!.departmentId) {
+        res.status(403).json({ error: 'forbidden' });
+        return;
+      }
       const result = createEpisode(db, req.user!.tenantId, req.body);
       if (!result.ok) {
-        res.status(result.error.endsWith('not_found') ? 404 : 400).json({ error: result.error });
+        const status = result.error === 'consent_required' ? 400 : result.error.endsWith('not_found') ? 404 : 400;
+        res.status(status).json({ error: result.error });
         return;
       }
       logAudit(db, req.user!.tenantId, req.user!.id, 'episode_created', 'patient_episode', result.id, null);
@@ -1795,6 +2080,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     '/proms/due-assignments',
     requireRole('SystemAdmin', 'QualityManager', 'DepartmentManager'),
     (req: Request, res: Response) => {
+      const { clause, params } = departmentScopeFilter(req, 'pe');
       const rows = db
         .prepare(
           `SELECT pa.id, pa.due_date, pa.status, pe.id as episode_id, pe.contact_phone, pe.surgeon_ref,
@@ -1805,10 +2091,10 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
            JOIN pathway_timepoints pt ON pt.id = pa.timepoint_id
            JOIN proms_instruments pi ON pi.id = pa.instrument_id
            JOIN care_pathways cp ON cp.id = pe.pathway_id
-           WHERE pe.tenant_id = ? AND pa.status = 'scheduled' AND datetime(pa.due_date) <= datetime('now')
+           WHERE pe.tenant_id = ? ${clause} AND pa.status = 'scheduled' AND datetime(pa.due_date) <= datetime('now')
            ORDER BY pa.due_date ASC`
         )
-        .all(req.user!.tenantId);
+        .all(req.user!.tenantId, ...params);
       res.json({ assignments: rows });
     }
   );
@@ -1819,7 +2105,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     async (req: Request, res: Response) => {
       const assignment = db
         .prepare(
-          `SELECT pa.id, pa.status, pe.tenant_id, pe.contact_phone, pi.name_ar as instrument_name_ar, pi.name_en as instrument_name_en,
+          `SELECT pa.id, pa.status, pe.tenant_id, pe.department_id, pe.contact_phone, pe.opted_out_at,
+                  pi.name_ar as instrument_name_ar, pi.name_en as instrument_name_en,
                   pi.license_status, pt.name_ar as timepoint_name_ar
            FROM prom_assignments pa
            JOIN patient_episodes pe ON pe.id = pa.episode_id
@@ -1832,7 +2119,9 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
             id: string;
             status: string;
             tenant_id: string;
+            department_id: string;
             contact_phone: string | null;
+            opted_out_at: string | null;
             instrument_name_ar: string;
             instrument_name_en: string;
             license_status: string;
@@ -1843,8 +2132,16 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         res.status(404).json({ error: 'not_found' });
         return;
       }
+      if (req.user!.role === 'DepartmentManager' && assignment.department_id !== req.user!.departmentId) {
+        res.status(403).json({ error: 'forbidden' });
+        return;
+      }
       if (assignment.license_status !== 'free') {
         res.status(409).json({ error: 'instrument_requires_manual_administration' });
+        return;
+      }
+      if (assignment.opted_out_at) {
+        res.status(409).json({ error: 'patient_opted_out' });
         return;
       }
       if (!assignment.contact_phone) {
@@ -1859,6 +2156,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       const rawToken = uid();
       const baseUrl = `${req.protocol}://${req.get('host')}`;
       const formUrl = `${baseUrl}/p/${rawToken}`;
+      const optOutUrl = `${formUrl}/opt-out`;
       const smsConfig = getTenantSmsConfig(db, req.user!.tenantId);
       const provider = createSmsProvider(smsConfig);
       const message = composePromsMessage(
@@ -1866,6 +2164,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         assignment.instrument_name_en,
         assignment.timepoint_name_ar,
         formUrl,
+        optOutUrl,
         smsConfig.defaultLanguage
       );
       const result = await provider.send(assignment.contact_phone, message);

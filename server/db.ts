@@ -235,7 +235,9 @@ CREATE TABLE IF NOT EXISTS service_recovery_cases (
   -- frame elsewhere) — consent is scoped to this one case, never a persistent patient account.
   patient_contact_opt_in INTEGER NOT NULL DEFAULT 0,
   patient_contact_phone TEXT,
-  patient_notified_at TEXT
+  patient_notified_at TEXT,
+  -- SLA deadline for closing the case, set when a QualityManager/DepartmentManager assigns it.
+  due_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_recovery_tenant ON service_recovery_cases(tenant_id);
 
@@ -310,7 +312,11 @@ CREATE TABLE IF NOT EXISTS patient_episodes (
   contact_phone TEXT,
   surgeon_ref TEXT,
   start_date TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'active'
+  status TEXT NOT NULL DEFAULT 'active',
+  -- Explicit consent to the longitudinal follow-up program, captured at episode creation.
+  -- opted_out_at is set if the patient later withdraws via the link in any PROMs SMS.
+  consent_at TEXT,
+  opted_out_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_episodes_tenant ON patient_episodes(tenant_id);
 
@@ -322,7 +328,8 @@ CREATE TABLE IF NOT EXISTS prom_assignments (
   due_date TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'scheduled',
   token_hash TEXT UNIQUE,
-  sent_at TEXT
+  sent_at TEXT,
+  reminder_sent_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_assignments_episode ON prom_assignments(episode_id);
 CREATE INDEX IF NOT EXISTS idx_assignments_token ON prom_assignments(token_hash);

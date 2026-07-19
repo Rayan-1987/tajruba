@@ -198,12 +198,17 @@ function CreateEpisodeForm({
   const [contactPhone, setContactPhone] = useState('');
   const [surgeonRef, setSurgeonRef] = useState('');
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [consent, setConsent] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const submit = async () => {
     if (!pathwayId || !departmentId || !patientRef || !startDate) {
       setResult('يرجى اختيار المسار والقسم وإدخال مرجع المريض وتاريخ البدء.');
+      return;
+    }
+    if (contactPhone && !consent) {
+      setResult('يلزم تأكيد موافقة المريض على المتابعة الطولية قبل إدخال رقم جواله.');
       return;
     }
     setBusy(true);
@@ -213,12 +218,14 @@ function CreateEpisodeForm({
         departmentId,
         patientRef,
         contactPhone: contactPhone || undefined,
+        consent: contactPhone ? consent : undefined,
         surgeonRef: surgeonRef || undefined,
         startDate
       });
       setResult('تم إنشاء الحلقة وجدولة تكليفاتها بنجاح.');
       setPatientRef('');
       setContactPhone('');
+      setConsent(false);
       setSurgeonRef('');
       onCreated();
     } catch {
@@ -276,6 +283,15 @@ function CreateEpisodeForm({
           className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
         />
       </div>
+      {contactPhone && (
+        <label className="mt-3 flex items-start gap-2 rounded-lg bg-amber-50 p-2.5 text-xs text-amber-800">
+          <input type="checkbox" className="mt-0.5" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
+          <span>
+            المريض وافق على أن يتم التواصل معه برسائل نصية على مدار برنامج المتابعة (حتى ١٢ شهرًا)، مع علمه أن بإمكانه
+            إيقاف الرسائل في أي وقت عبر الرابط المرفق بكل رسالة.
+          </span>
+        </label>
+      )}
       <button
         type="button"
         onClick={submit}

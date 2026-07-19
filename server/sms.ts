@@ -99,10 +99,25 @@ export function composePromsMessage(
   instrumentNameEn: string,
   timepointNameAr: string,
   formUrl: string,
+  optOutUrl: string,
   language: 'ar' | 'en'
 ): string {
   if (language === 'en') {
-    return `Please complete "${instrumentNameEn}" (${timepointNameAr}) so we can track your recovery — ${formUrl}`;
+    return `Please complete "${instrumentNameEn}" (${timepointNameAr}) so we can track your recovery — ${formUrl}\nTo stop these messages: ${optOutUrl}`;
   }
-  return `نرجو تعبئة "${instrumentNameAr}" (${timepointNameAr}) لمتابعة حالتك الصحية — ${formUrl}`;
+  return `نرجو تعبئة "${instrumentNameAr}" (${timepointNameAr}) لمتابعة حالتك الصحية — ${formUrl}\nلإيقاف هذه الرسائل: ${optOutUrl}`;
+}
+
+/** Composes a one-time reminder for a PROMs assignment that was sent but never completed. */
+export function composePromsReminderMessage(
+  instrumentNameAr: string,
+  instrumentNameEn: string,
+  formUrl: string,
+  optOutUrl: string,
+  language: 'ar' | 'en'
+): string {
+  if (language === 'en') {
+    return `Reminder: please complete "${instrumentNameEn}" — ${formUrl}\nTo stop these messages: ${optOutUrl}`;
+  }
+  return `تذكير: نرجو تعبئة "${instrumentNameAr}" — ${formUrl}\nلإيقاف هذه الرسائل: ${optOutUrl}`;
 }

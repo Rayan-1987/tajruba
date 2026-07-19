@@ -197,8 +197,13 @@ export default function Settings() {
           <code className="break-all text-slate-700">{settings.hisEpisodesWebhookUrl}</code>
           <p className="mb-1 mt-2 font-semibold text-slate-600">نص الطلب (Body، JSON):</p>
           <code className="text-slate-700">
-            {'{ "pathwayId": "...", "departmentId": "...", "patientRef": "MRN123", "contactPhone": "05xxxxxxxx", "startDate": "2026-01-01" }'}
+            {
+              '{ "pathwayId": "...", "departmentId": "...", "patientRef": "MRN123", "contactPhone": "05xxxxxxxx", "consent": true, "startDate": "2026-01-01" }'
+            }
           </code>
+          <p className="mb-2 text-[11px] text-amber-700">
+            ملاحظة: عند إرفاق contactPhone يجب إرسال "consent": true لتأكيد موافقة المريض على المتابعة الطولية، وإلا يُرفض الطلب.
+          </p>
           <p className="mb-1 mt-3 font-semibold text-slate-600">الترويسة المطلوبة لكلا الرابطين (Header):</p>
           <code className="text-slate-700">X-Api-Key: &lt;المفتاح&gt;</code>
         </div>

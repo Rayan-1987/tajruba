@@ -54,8 +54,10 @@ async function start() {
   const PROMS_AUTO_SEND_INTERVAL_MS = 60 * 60 * 1000;
   const runAutoSend = () =>
     autoSendDuePromsAssignments(db, baseUrl)
-      .then(({ sent, failed, skipped }) => {
-        if (sent || failed) console.log(`PROMs auto-send: sent=${sent} failed=${failed} skipped=${skipped}`);
+      .then(({ sent, failed, skipped, reminded, expired }) => {
+        if (sent || failed || reminded || expired) {
+          console.log(`PROMs auto-send: sent=${sent} failed=${failed} skipped=${skipped} reminded=${reminded} expired=${expired}`);
+        }
       })
       .catch((error) => console.error('PROMs auto-send failed', error));
   runAutoSend();

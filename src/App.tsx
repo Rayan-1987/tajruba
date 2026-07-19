@@ -5,6 +5,7 @@ import Register from './pages/Register';
 import PatientSurvey from './pages/PatientSurvey';
 import KioskSurvey from './pages/KioskSurvey';
 import PatientPromsForm from './pages/PatientPromsForm';
+import PatientPromsOptOut from './pages/PatientPromsOptOut';
 import DashboardLayout from './pages/DashboardLayout';
 import Reports from './pages/Reports';
 import CommentsIntelligence from './pages/CommentsIntelligence';
@@ -37,6 +38,7 @@ export default function App() {
       <Route path="/s/:token" element={<PatientSurvey />} />
       <Route path="/k/:code" element={<KioskSurvey />} />
       <Route path="/p/:token" element={<PatientPromsForm />} />
+      <Route path="/p/:token/opt-out" element={<PatientPromsOptOut />} />
       <Route
         path="/dashboard"
         element={
