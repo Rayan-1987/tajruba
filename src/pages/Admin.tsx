@@ -249,9 +249,57 @@ function UsersTab() {
     load();
   };
 
-  const changeRole = async (u: UserRow, newRole: Role) => {
-    await api.patch(`/users/${u.id}`, { role: newRole, departmentId: u.department_id });
+  // Changing TO DepartmentManager always needs an explicit department — reusing the user's old
+  // department_id (usually null, since most roles never had one) would silently create a
+  // DepartmentManager scoped to no department, which bypasses department-based access control
+  // entirely instead of restricting it. So that one transition is held back until a department
+  // is chosen; every other role change applies immediately, same as before.
+  const [pendingRoleChange, setPendingRoleChange] = useState<Record<string, string>>({});
+  const [roleChangeError, setRoleChangeError] = useState<string | null>(null);
+
+  const selectRole = (u: UserRow, newRole: Role) => {
+    setRoleChangeError(null);
+    if (newRole === 'DepartmentManager') {
+      setPendingRoleChange((prev) => ({ ...prev, [u.id]: u.department_id ?? '' }));
+      return;
+    }
+    setPendingRoleChange((prev) => {
+      const next = { ...prev };
+      delete next[u.id];
+      return next;
+    });
+    api.patch(`/users/${u.id}`, { role: newRole }).then(load);
+  };
+
+  const confirmDepartmentManagerChange = async (u: UserRow) => {
+    const departmentId = pendingRoleChange[u.id];
+    if (!departmentId) {
+      setRoleChangeError('يجب اختيار القسم عند تحويل المستخدم إلى مدير قسم.');
+      return;
+    }
+    setRoleChangeError(null);
+    await api.patch(`/users/${u.id}`, { role: 'DepartmentManager', departmentId });
+    setPendingRoleChange((prev) => {
+      const next = { ...prev };
+      delete next[u.id];
+      return next;
+    });
     load();
+  };
+
+  const [passwordDraft, setPasswordDraft] = useState<Record<string, string>>({});
+  const [passwordResultByUser, setPasswordResultByUser] = useState<Record<string, string>>({});
+
+  const setUserPassword = async (u: UserRow) => {
+    const newPassword = passwordDraft[u.id];
+    if (!newPassword) return;
+    try {
+      await api.patch(`/users/${u.id}`, { password: newPassword });
+      setPasswordDraft((prev) => ({ ...prev, [u.id]: '' }));
+      setPasswordResultByUser((prev) => ({ ...prev, [u.id]: 'تم تعيين كلمة المرور — أُنهيت كل جلسات دخول هذا المستخدم.' }));
+    } catch {
+      setPasswordResultByUser((prev) => ({ ...prev, [u.id]: 'تعذر تعيين كلمة المرور (٨ أحرف على الأقل).' }));
+    }
   };
 
   return (
@@ -292,6 +340,8 @@ function UsersTab() {
         {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
       </div>
 
+      {roleChangeError && <p className="text-xs text-red-600">{roleChangeError}</p>}
+
       <div className="rounded-2xl bg-white shadow-sm">
         <table className="w-full text-sm">
           <thead>
@@ -300,24 +350,69 @@ function UsersTab() {
               <th className="px-4 py-2 font-medium">البريد الإلكتروني</th>
               <th className="px-4 py-2 font-medium">الصلاحية</th>
               <th className="px-4 py-2 font-medium">الحالة</th>
+              <th className="px-4 py-2 font-medium">كلمة المرور</th>
               <th className="px-4 py-2 font-medium"></th>
             </tr>
           </thead>
           <tbody>
             {users.map((u) => (
-              <tr key={u.id} className="border-b border-slate-50">
+              <tr key={u.id} className="border-b border-slate-50 align-top">
                 <td className={`px-4 py-2 ${u.active ? 'text-slate-700' : 'text-slate-400 line-through'}`}>{u.full_name}</td>
                 <td className="px-4 py-2 text-xs text-slate-500">{u.email}</td>
                 <td className="px-4 py-2">
-                  <select value={u.role} onChange={(e) => changeRole(u, e.target.value as Role)} className="rounded border border-slate-300 px-2 py-1 text-xs">
+                  <select
+                    value={pendingRoleChange[u.id] !== undefined ? 'DepartmentManager' : u.role}
+                    onChange={(e) => selectRole(u, e.target.value as Role)}
+                    className="rounded border border-slate-300 px-2 py-1 text-xs"
+                  >
                     {Object.entries(ROLE_LABELS_AR).map(([value, label]) => (
                       <option key={value} value={value}>
                         {label}
                       </option>
                     ))}
                   </select>
+                  {pendingRoleChange[u.id] !== undefined && (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      <select
+                        value={pendingRoleChange[u.id]}
+                        onChange={(e) => setPendingRoleChange((prev) => ({ ...prev, [u.id]: e.target.value }))}
+                        className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs"
+                      >
+                        <option value="">اختر القسم</option>
+                        {departments.map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.name_ar}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => confirmDepartmentManagerChange(u)}
+                        className="rounded bg-emerald-600 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-700"
+                      >
+                        تأكيد
+                      </button>
+                    </div>
+                  )}
                 </td>
                 <td className="px-4 py-2 text-xs">{u.active ? '✅ فعّال' : '⏸️ موقوف'}</td>
+                <td className="px-4 py-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <input
+                      type="password"
+                      value={passwordDraft[u.id] ?? ''}
+                      onChange={(e) => setPasswordDraft((prev) => ({ ...prev, [u.id]: e.target.value }))}
+                      placeholder="كلمة مرور جديدة"
+                      className="w-32 rounded border border-slate-300 px-2 py-1 text-xs"
+                    />
+                    <button
+                      onClick={() => setUserPassword(u)}
+                      className="rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                    >
+                      تعيين
+                    </button>
+                  </div>
+                  {passwordResultByUser[u.id] && <p className="mt-1 max-w-[10rem] text-[10px] text-slate-500">{passwordResultByUser[u.id]}</p>}
+                </td>
                 <td className="px-4 py-2 text-left">
                   <button onClick={() => toggleActive(u)} className="text-xs font-semibold text-red-600 hover:underline">
                     {u.active ? 'إيقاف' : 'تفعيل'}

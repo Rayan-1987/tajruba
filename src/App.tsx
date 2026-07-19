@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useAuth } from './AuthContext';
+import type { Role } from './types';
 import Login from './pages/Login';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
@@ -32,6 +33,28 @@ function ProtectedRoutes({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+// Hiding a link from the sidebar (DashboardLayout's NAV_ITEMS) isn't real access control — a
+// user who already knows or guesses the URL would otherwise still mount the full page, which
+// then either shows a confusing pile of failed/empty requests (routes the API does protect) or,
+// worse, renders data from routes the API leaves open to any authenticated user. This gate is
+// the actual enforcement point on the client; the server-side requireRole() checks remain the
+// real security boundary regardless.
+function RoleGate({ allow, children }: { allow: Role[]; children: React.ReactNode }) {
+  const { user } = useAuth();
+  if (!user) return null;
+  if (!allow.includes(user.role)) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center" dir="rtl">
+        <div className="rounded-2xl bg-white p-8 text-center shadow-sm">
+          <p className="text-lg font-semibold text-slate-700">لا تملك صلاحية الوصول لهذه الصفحة</p>
+          <p className="mt-1 text-sm text-slate-500">هذه الصفحة مخصّصة لأدوار محدّدة فقط.</p>
+        </div>
+      </div>
+    );
+  }
+  return <>{children}</>;
+}
+
 export default function App() {
   return (
     <Routes>
@@ -57,10 +80,38 @@ export default function App() {
         <Route path="service-recovery" element={<ServiceRecovery />} />
         <Route path="proms" element={<PromsMonitor />} />
         <Route path="phone-survey" element={<PhoneSurvey />} />
-        <Route path="survey-studio" element={<SurveyStudio />} />
-        <Route path="data-center" element={<DataCenter />} />
-        <Route path="admin" element={<Admin />} />
-        <Route path="settings" element={<Settings />} />
+        <Route
+          path="survey-studio"
+          element={
+            <RoleGate allow={['SystemAdmin', 'QualityManager']}>
+              <SurveyStudio />
+            </RoleGate>
+          }
+        />
+        <Route
+          path="data-center"
+          element={
+            <RoleGate allow={['SystemAdmin', 'QualityManager']}>
+              <DataCenter />
+            </RoleGate>
+          }
+        />
+        <Route
+          path="admin"
+          element={
+            <RoleGate allow={['SystemAdmin']}>
+              <Admin />
+            </RoleGate>
+          }
+        />
+        <Route
+          path="settings"
+          element={
+            <RoleGate allow={['SystemAdmin']}>
+              <Settings />
+            </RoleGate>
+          }
+        />
       </Route>
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

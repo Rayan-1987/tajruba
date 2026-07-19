@@ -1305,7 +1305,9 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
   });
 
   router.patch('/users/:id', requireRole('SystemAdmin'), express.json({ limit: '8kb' }), (req: Request, res: Response) => {
-    const existing = db.prepare('SELECT id FROM users WHERE id = ? AND tenant_id = ?').get(req.params.id, req.user!.tenantId);
+    const existing = db.prepare('SELECT id, role FROM users WHERE id = ? AND tenant_id = ?').get(req.params.id, req.user!.tenantId) as
+      | { id: string; role: Role }
+      | undefined;
     if (!existing) {
       res.status(404).json({ error: 'not_found' });
       return;
@@ -1326,12 +1328,23 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         res.status(400).json({ error: 'invalid_role' });
         return;
       }
+      // A DepartmentManager with no department bypasses departmentScopeFilter() entirely
+      // (it only scopes when departmentId is truthy) and would see every department's data —
+      // this must be impossible to create, matching the same check already enforced on POST /users.
+      if (role === 'DepartmentManager' && !departmentId) {
+        res.status(400).json({ error: 'department_required_for_department_manager' });
+        return;
+      }
       db.prepare('UPDATE users SET role = ?, department_id = ? WHERE id = ?').run(
         role,
-        role === 'DepartmentManager' ? (departmentId ?? null) : null,
+        role === 'DepartmentManager' ? departmentId ?? null : null,
         req.params.id
       );
     } else if (departmentId !== undefined) {
+      if (existing.role === 'DepartmentManager' && !departmentId) {
+        res.status(400).json({ error: 'department_required_for_department_manager' });
+        return;
+      }
       db.prepare('UPDATE users SET department_id = ? WHERE id = ?').run(departmentId, req.params.id);
     }
     if (fullName !== undefined) db.prepare('UPDATE users SET full_name = ? WHERE id = ?').run(fullName, req.params.id);

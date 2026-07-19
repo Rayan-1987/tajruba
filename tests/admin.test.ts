@@ -150,6 +150,78 @@ test('a SystemAdmin can create a user, change their role, and cannot deactivate 
   }
 });
 
+test('promoting a user to DepartmentManager without a department is rejected, and cannot be used to escape department scoping', async () => {
+  const { server, baseUrl, db } = await startServer();
+  try {
+    const adminCookie = await login(baseUrl, 'admin@tajruba.sa', 'Tajruba123!');
+    const usersList = (await (await fetch(`${baseUrl}/api/users`, { headers: { cookie: adminCookie } })).json()) as {
+      users: { id: string; email: string; department_id: string | null }[];
+    };
+    const executive = usersList.users.find((u) => u.email === 'executive@tajruba.sa')!;
+    assert.equal(executive.department_id, null, 'executive must start with no department, the exact condition that triggers the bug');
+
+    // No departmentId at all.
+    const noDeptRes = await fetch(`${baseUrl}/api/users/${executive.id}`, {
+      method: 'PATCH',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ role: 'DepartmentManager' })
+    });
+    assert.equal(noDeptRes.status, 400);
+    assert.equal((await noDeptRes.json()).error, 'department_required_for_department_manager');
+
+    // Reusing the user's own (null) department_id, exactly what the Admin.tsx role dropdown
+    // used to do before this fix.
+    const reuseNullRes = await fetch(`${baseUrl}/api/users/${executive.id}`, {
+      method: 'PATCH',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ role: 'DepartmentManager', departmentId: executive.department_id })
+    });
+    assert.equal(reuseNullRes.status, 400);
+
+    const stillExecutive = (await (await fetch(`${baseUrl}/api/users`, { headers: { cookie: adminCookie } })).json()) as {
+      users: { id: string; role: string }[];
+    };
+    assert.equal(stillExecutive.users.find((u) => u.id === executive.id)!.role, 'ExecutiveViewer', 'the rejected request must not change the role');
+
+    // A real DepartmentManager cannot be stripped of their department while keeping the role,
+    // either (the departmentId-only PATCH path had the same hole).
+    const deptManagerRow = usersList.users.find((u) => u.email === 'department@tajruba.sa')!;
+    const stripDeptRes = await fetch(`${baseUrl}/api/users/${deptManagerRow.id}`, {
+      method: 'PATCH',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ departmentId: null })
+    });
+    assert.equal(stripDeptRes.status, 400);
+
+    // The properly-validated path still works: pick a real department and it succeeds.
+    const departments = (await (await fetch(`${baseUrl}/api/departments`, { headers: { cookie: adminCookie } })).json()) as {
+      departments: { id: string }[];
+    };
+    const validRes = await fetch(`${baseUrl}/api/users/${executive.id}`, {
+      method: 'PATCH',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ role: 'DepartmentManager', departmentId: departments.departments[0].id })
+    });
+    assert.equal(validRes.status, 200);
+
+    // Confirm the fix actually closes the exploit path end to end: log in as the (properly
+    // scoped) promoted user and verify they only see one department's comments, not all of them.
+    const promotedLogin = await fetch(`${baseUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'executive@tajruba.sa', password: 'Executive123!' })
+    });
+    const promotedCookie = promotedLogin.headers.get('set-cookie')!.split(';')[0];
+    const commentsRes = await fetch(`${baseUrl}/api/comments`, { headers: { cookie: promotedCookie } });
+    const comments = (await commentsRes.json()) as { comments: { department_id: string }[] };
+    const distinctDepartments = new Set(comments.comments.map((c) => c.department_id));
+    assert.ok(distinctDepartments.size <= 1, 'a properly-scoped DepartmentManager must see at most one department');
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
 test('a new domain and question are provisioned into the matching survey template', async () => {
   const { server, baseUrl, db } = await startServer();
   try {
