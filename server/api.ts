@@ -24,6 +24,7 @@ import {
   scoreNps,
   scoreQuestion,
   scoreYesNo,
+  type InstrumentDefinition,
   type InstrumentItemValue
 } from './scoring.ts';
 import { DEFAULT_DEPARTMENTS, provisionTenantDefaults } from './provisioning.ts';
@@ -35,6 +36,7 @@ import {
   createSmsProvider,
   type TenantSmsConfig
 } from './sms.ts';
+import { composePasswordResetEmail, createEmailProvider } from './email.ts';
 import type { AnswerType, RecoveryStatus, Role, ServiceType } from './types.ts';
 
 function uid(): string {
@@ -56,6 +58,18 @@ function isPromsWindowExpired(dueDate: string, windowDays: number): boolean {
   const expiry = new Date(dueDate);
   expiry.setDate(expiry.getDate() + windowDays);
   return Date.now() > expiry.getTime();
+}
+
+// Seeded instruments (PHQ9, GAD7, VAS_PAIN, ...) have a hand-written InstrumentDefinition in
+// scoring.ts, sometimes with clinical severity bands that can't be derived generically. An
+// instrument an admin creates through the UI has no such entry, so it falls back to a plain
+// sum-of-items definition driven entirely by its own DB row — every instrument in this system
+// scores as a reverse-scoring-aware sum (see computeInstrumentRaw), so no band function is the
+// only real difference, and MCID/delta still work correctly without one.
+function resolveInstrumentDefinition(code: string, higherIsBetter: number, mcidThreshold: number): InstrumentDefinition {
+  const hardcoded = INSTRUMENTS[code];
+  if (hardcoded) return hardcoded;
+  return { code, minItems: 0, maxItems: Infinity, higherIsBetter: !!higherIsBetter, mcidThreshold };
 }
 
 function logAudit(
@@ -644,6 +658,65 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     res.json({ ok: true });
   });
 
+  const PASSWORD_RESET_TTL_MS = 30 * 60 * 1000;
+
+  router.post('/auth/forgot-password', express.json({ limit: '8kb' }), async (req: Request, res: Response) => {
+    const { email } = req.body as { email?: string };
+    if (!email) {
+      res.status(400).json({ error: 'email_required' });
+      return;
+    }
+    const user = db
+      .prepare('SELECT id, email FROM users WHERE email = ? AND active = 1')
+      .get(email.toLowerCase().trim()) as { id: string; email: string } | undefined;
+
+    // Always respond the same way whether or not the account exists, so this endpoint can't be
+    // used to discover which email addresses have accounts.
+    if (user) {
+      const rawToken = uid();
+      const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS).toISOString();
+      db.prepare('UPDATE users SET password_reset_token_hash = ?, password_reset_expires_at = ? WHERE id = ?').run(
+        sha256(rawToken),
+        expiresAt,
+        user.id
+      );
+      const baseUrl = `${req.protocol}://${req.get('host')}`;
+      const resetUrl = `${baseUrl}/reset-password/${rawToken}`;
+      const { subject, body } = composePasswordResetEmail(resetUrl, 'ar');
+      const provider = createEmailProvider();
+      const result = await provider.send(user.email, subject, body);
+      logAudit(db, null, user.id, 'password_reset_requested', 'user', user.id, { ok: result.ok });
+    }
+    res.json({ ok: true });
+  });
+
+  router.post('/auth/reset-password', express.json({ limit: '8kb' }), (req: Request, res: Response) => {
+    const { token, newPassword } = req.body as { token?: string; newPassword?: string };
+    if (!token || !newPassword) {
+      res.status(400).json({ error: 'invalid_payload' });
+      return;
+    }
+    if (newPassword.length < 8) {
+      res.status(400).json({ error: 'password_too_short' });
+      return;
+    }
+    const user = db
+      .prepare(
+        `SELECT id FROM users WHERE password_reset_token_hash = ? AND password_reset_expires_at IS NOT NULL
+         AND datetime(password_reset_expires_at) > datetime('now')`
+      )
+      .get(sha256(token)) as { id: string } | undefined;
+    if (!user) {
+      res.status(400).json({ error: 'invalid_or_expired_token' });
+      return;
+    }
+    db.prepare(
+      "UPDATE users SET password_hash = ?, password_reset_token_hash = NULL, password_reset_expires_at = NULL WHERE id = ?"
+    ).run(hashPassword(newPassword), user.id);
+    logAudit(db, null, user.id, 'password_reset_completed', 'user', user.id, null);
+    res.json({ ok: true });
+  });
+
   router.post('/auth/logout', (req: Request, res: Response) => {
     const token = readSessionToken(req);
     if (token) destroySession(db, token);
@@ -829,7 +902,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     const assignment = db
       .prepare(
         `SELECT pa.id, pa.episode_id, pa.timepoint_id, pa.instrument_id, pa.status, pa.due_date, pi.code as instrument_code,
-                pi.license_status, pt.window_days, pe.tenant_id, pe.opted_out_at
+                pi.license_status, pi.higher_is_better, pi.mcid_threshold, pt.window_days, pe.tenant_id, pe.opted_out_at
          FROM prom_assignments pa
          JOIN proms_instruments pi ON pi.id = pa.instrument_id
          JOIN pathway_timepoints pt ON pt.id = pa.timepoint_id
@@ -846,6 +919,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
           due_date: string;
           instrument_code: string;
           license_status: string;
+          higher_is_better: number;
+          mcid_threshold: number;
           window_days: number;
           tenant_id: string;
           opted_out_at: string | null;
@@ -872,11 +947,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       return;
     }
 
-    const definition = INSTRUMENTS[assignment.instrument_code];
-    if (!definition) {
-      res.status(500).json({ error: 'instrument_not_scorable' });
-      return;
-    }
+    const definition = resolveInstrumentDefinition(assignment.instrument_code, assignment.higher_is_better, assignment.mcid_threshold);
 
     const body = req.body as { answers?: { code: string; value: number }[] };
     if (!Array.isArray(body.answers)) {
@@ -894,7 +965,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       if (!def || typeof answer.value !== 'number' || !Number.isFinite(answer.value)) continue;
       items.push({ code: answer.code, value: answer.value, reverseScored: !!def.reverse_scored, scaleMax: def.scale_max });
     }
-    if (items.length < definition.minItems) {
+    if (items.length < itemDefs.length) {
       res.status(400).json({ error: 'incomplete_answers' });
       return;
     }
@@ -1926,10 +1997,154 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
   // -------------------------------------------------------------------------
   router.get('/proms/instruments', (req: Request, res: Response) => {
     const instruments = db
-      .prepare('SELECT id, code, name_ar, name_en, license_status, description_ar FROM proms_instruments WHERE tenant_id = ?')
-      .all(req.user!.tenantId);
-    res.json({ instruments });
+      .prepare(
+        'SELECT id, code, name_ar, name_en, license_status, description_ar, higher_is_better, mcid_threshold FROM proms_instruments WHERE tenant_id = ?'
+      )
+      .all(req.user!.tenantId) as { id: string }[];
+    const withItems = instruments.map((i) => ({
+      ...i,
+      items: db
+        .prepare('SELECT id, code, text_ar, text_en, reverse_scored, scale_max, sort_order FROM proms_instrument_items WHERE instrument_id = ? ORDER BY sort_order')
+        .all(i.id)
+    }));
+    res.json({ instruments: withItems });
   });
+
+  router.post(
+    '/proms/instruments',
+    requireRole('SystemAdmin'),
+    express.json({ limit: '8kb' }),
+    (req: Request, res: Response) => {
+      const { code, nameAr, nameEn, licenseStatus, descriptionAr, higherIsBetter, mcidThreshold } = req.body as {
+        code?: string;
+        nameAr?: string;
+        nameEn?: string;
+        licenseStatus?: string;
+        descriptionAr?: string;
+        higherIsBetter?: boolean;
+        mcidThreshold?: number;
+      };
+      if (!code || !nameAr || !nameEn || !licenseStatus || !descriptionAr) {
+        res.status(400).json({ error: 'invalid_payload' });
+        return;
+      }
+      if (licenseStatus !== 'free' && licenseStatus !== 'licensed_required') {
+        res.status(400).json({ error: 'invalid_license_status' });
+        return;
+      }
+      const id = uid();
+      try {
+        db.prepare(
+          `INSERT INTO proms_instruments (id, tenant_id, code, name_ar, name_en, license_status, description_ar, higher_is_better, mcid_threshold)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(id, req.user!.tenantId, code, nameAr, nameEn, licenseStatus, descriptionAr, higherIsBetter ? 1 : 0, mcidThreshold ?? 1);
+      } catch {
+        res.status(409).json({ error: 'code_already_exists' });
+        return;
+      }
+      logAudit(db, req.user!.tenantId, req.user!.id, 'instrument_created', 'proms_instrument', id, { code });
+      res.status(201).json({ id });
+    }
+  );
+
+  router.patch(
+    '/proms/instruments/:id',
+    requireRole('SystemAdmin'),
+    express.json({ limit: '8kb' }),
+    (req: Request, res: Response) => {
+      const existing = db.prepare('SELECT id FROM proms_instruments WHERE id = ? AND tenant_id = ?').get(req.params.id, req.user!.tenantId);
+      if (!existing) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      const { nameAr, nameEn, licenseStatus, descriptionAr, higherIsBetter, mcidThreshold } = req.body as {
+        nameAr?: string;
+        nameEn?: string;
+        licenseStatus?: string;
+        descriptionAr?: string;
+        higherIsBetter?: boolean;
+        mcidThreshold?: number;
+      };
+      if (nameAr !== undefined) db.prepare('UPDATE proms_instruments SET name_ar = ? WHERE id = ?').run(nameAr, req.params.id);
+      if (nameEn !== undefined) db.prepare('UPDATE proms_instruments SET name_en = ? WHERE id = ?').run(nameEn, req.params.id);
+      if (descriptionAr !== undefined) db.prepare('UPDATE proms_instruments SET description_ar = ? WHERE id = ?').run(descriptionAr, req.params.id);
+      if (licenseStatus === 'free' || licenseStatus === 'licensed_required')
+        db.prepare('UPDATE proms_instruments SET license_status = ? WHERE id = ?').run(licenseStatus, req.params.id);
+      if (higherIsBetter !== undefined)
+        db.prepare('UPDATE proms_instruments SET higher_is_better = ? WHERE id = ?').run(higherIsBetter ? 1 : 0, req.params.id);
+      if (mcidThreshold !== undefined) db.prepare('UPDATE proms_instruments SET mcid_threshold = ? WHERE id = ?').run(mcidThreshold, req.params.id);
+      logAudit(db, req.user!.tenantId, req.user!.id, 'instrument_updated', 'proms_instrument', req.params.id, req.body);
+      res.json({ ok: true });
+    }
+  );
+
+  router.post(
+    '/proms/instruments/:id/items',
+    requireRole('SystemAdmin'),
+    express.json({ limit: '8kb' }),
+    (req: Request, res: Response) => {
+      const instrument = db.prepare('SELECT id FROM proms_instruments WHERE id = ? AND tenant_id = ?').get(req.params.id, req.user!.tenantId);
+      if (!instrument) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      const { code, textAr, textEn, reverseScored, scaleMax } = req.body as {
+        code?: string;
+        textAr?: string;
+        textEn?: string;
+        reverseScored?: boolean;
+        scaleMax?: number;
+      };
+      if (!code || !textAr || !textEn || !scaleMax || scaleMax < 1) {
+        res.status(400).json({ error: 'invalid_payload' });
+        return;
+      }
+      const nextSortOrder = (
+        db.prepare('SELECT COALESCE(MAX(sort_order), -1) + 1 as n FROM proms_instrument_items WHERE instrument_id = ?').get(req.params.id) as {
+          n: number;
+        }
+      ).n;
+      const id = uid();
+      db.prepare(
+        `INSERT INTO proms_instrument_items (id, instrument_id, code, text_ar, text_en, reverse_scored, scale_max, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(id, req.params.id, code, textAr, textEn, reverseScored ? 1 : 0, scaleMax, nextSortOrder);
+      logAudit(db, req.user!.tenantId, req.user!.id, 'instrument_item_created', 'proms_instrument_item', id, { code });
+      res.status(201).json({ id });
+    }
+  );
+
+  router.patch(
+    '/proms/instrument-items/:id',
+    requireRole('SystemAdmin'),
+    express.json({ limit: '8kb' }),
+    (req: Request, res: Response) => {
+      const existing = db
+        .prepare(
+          `SELECT pii.id FROM proms_instrument_items pii
+           JOIN proms_instruments pi ON pi.id = pii.instrument_id
+           WHERE pii.id = ? AND pi.tenant_id = ?`
+        )
+        .get(req.params.id, req.user!.tenantId);
+      if (!existing) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      const { textAr, textEn, reverseScored, scaleMax } = req.body as {
+        textAr?: string;
+        textEn?: string;
+        reverseScored?: boolean;
+        scaleMax?: number;
+      };
+      if (textAr !== undefined) db.prepare('UPDATE proms_instrument_items SET text_ar = ? WHERE id = ?').run(textAr, req.params.id);
+      if (textEn !== undefined) db.prepare('UPDATE proms_instrument_items SET text_en = ? WHERE id = ?').run(textEn, req.params.id);
+      if (reverseScored !== undefined)
+        db.prepare('UPDATE proms_instrument_items SET reverse_scored = ? WHERE id = ?').run(reverseScored ? 1 : 0, req.params.id);
+      if (scaleMax !== undefined && scaleMax >= 1) db.prepare('UPDATE proms_instrument_items SET scale_max = ? WHERE id = ?').run(scaleMax, req.params.id);
+      logAudit(db, req.user!.tenantId, req.user!.id, 'instrument_item_updated', 'proms_instrument_item', req.params.id, req.body);
+      res.json({ ok: true });
+    }
+  );
 
   router.get('/proms/pathways', (req: Request, res: Response) => {
     const pathways = db
@@ -1938,11 +2153,142 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     const withTimepoints = pathways.map((p) => ({
       ...p,
       timepoints: db
-        .prepare('SELECT id, code, name_ar, offset_days, window_days FROM pathway_timepoints WHERE pathway_id = ? ORDER BY sort_order')
+        .prepare('SELECT id, code, name_ar, offset_days, window_days, instrument_ids_json FROM pathway_timepoints WHERE pathway_id = ? ORDER BY sort_order')
         .all(p.id)
     }));
     res.json({ pathways: withTimepoints });
   });
+
+  router.post(
+    '/proms/pathways',
+    requireRole('SystemAdmin'),
+    express.json({ limit: '8kb' }),
+    (req: Request, res: Response) => {
+      const { code, nameAr, nameEn } = req.body as { code?: string; nameAr?: string; nameEn?: string };
+      if (!code || !nameAr || !nameEn) {
+        res.status(400).json({ error: 'invalid_payload' });
+        return;
+      }
+      const id = uid();
+      try {
+        db.prepare('INSERT INTO care_pathways (id, tenant_id, code, name_ar, name_en) VALUES (?, ?, ?, ?, ?)').run(
+          id,
+          req.user!.tenantId,
+          code,
+          nameAr,
+          nameEn
+        );
+      } catch {
+        res.status(409).json({ error: 'code_already_exists' });
+        return;
+      }
+      logAudit(db, req.user!.tenantId, req.user!.id, 'pathway_created', 'care_pathway', id, { code });
+      res.status(201).json({ id });
+    }
+  );
+
+  router.patch(
+    '/proms/pathways/:id',
+    requireRole('SystemAdmin'),
+    express.json({ limit: '8kb' }),
+    (req: Request, res: Response) => {
+      const existing = db.prepare('SELECT id FROM care_pathways WHERE id = ? AND tenant_id = ?').get(req.params.id, req.user!.tenantId);
+      if (!existing) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      const { nameAr, nameEn } = req.body as { nameAr?: string; nameEn?: string };
+      if (nameAr !== undefined) db.prepare('UPDATE care_pathways SET name_ar = ? WHERE id = ?').run(nameAr, req.params.id);
+      if (nameEn !== undefined) db.prepare('UPDATE care_pathways SET name_en = ? WHERE id = ?').run(nameEn, req.params.id);
+      logAudit(db, req.user!.tenantId, req.user!.id, 'pathway_updated', 'care_pathway', req.params.id, req.body);
+      res.json({ ok: true });
+    }
+  );
+
+  router.post(
+    '/proms/pathways/:id/timepoints',
+    requireRole('SystemAdmin'),
+    express.json({ limit: '8kb' }),
+    (req: Request, res: Response) => {
+      const pathway = db.prepare('SELECT id FROM care_pathways WHERE id = ? AND tenant_id = ?').get(req.params.id, req.user!.tenantId);
+      if (!pathway) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      const { code, nameAr, offsetDays, windowDays, instrumentIds } = req.body as {
+        code?: string;
+        nameAr?: string;
+        offsetDays?: number;
+        windowDays?: number;
+        instrumentIds?: string[];
+      };
+      if (!code || !nameAr || offsetDays === undefined || !Array.isArray(instrumentIds) || instrumentIds.length === 0) {
+        res.status(400).json({ error: 'invalid_payload' });
+        return;
+      }
+      const validInstrumentIds = new Set(
+        (
+          db.prepare('SELECT id FROM proms_instruments WHERE tenant_id = ?').all(req.user!.tenantId) as { id: string }[]
+        ).map((i) => i.id)
+      );
+      if (!instrumentIds.every((id) => validInstrumentIds.has(id))) {
+        res.status(400).json({ error: 'invalid_instrument_id' });
+        return;
+      }
+      const nextSortOrder = (
+        db.prepare('SELECT COALESCE(MAX(sort_order), -1) + 1 as n FROM pathway_timepoints WHERE pathway_id = ?').get(req.params.id) as {
+          n: number;
+        }
+      ).n;
+      const id = uid();
+      db.prepare(
+        `INSERT INTO pathway_timepoints (id, pathway_id, code, name_ar, offset_days, window_days, instrument_ids_json, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(id, req.params.id, code, nameAr, offsetDays, windowDays ?? 14, JSON.stringify(instrumentIds), nextSortOrder);
+      logAudit(db, req.user!.tenantId, req.user!.id, 'timepoint_created', 'pathway_timepoint', id, { code });
+      res.status(201).json({ id });
+    }
+  );
+
+  router.patch(
+    '/proms/timepoints/:id',
+    requireRole('SystemAdmin'),
+    express.json({ limit: '8kb' }),
+    (req: Request, res: Response) => {
+      const existing = db
+        .prepare(
+          `SELECT pt.id FROM pathway_timepoints pt JOIN care_pathways cp ON cp.id = pt.pathway_id WHERE pt.id = ? AND cp.tenant_id = ?`
+        )
+        .get(req.params.id, req.user!.tenantId);
+      if (!existing) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      const { nameAr, offsetDays, windowDays, instrumentIds } = req.body as {
+        nameAr?: string;
+        offsetDays?: number;
+        windowDays?: number;
+        instrumentIds?: string[];
+      };
+      if (nameAr !== undefined) db.prepare('UPDATE pathway_timepoints SET name_ar = ? WHERE id = ?').run(nameAr, req.params.id);
+      if (offsetDays !== undefined) db.prepare('UPDATE pathway_timepoints SET offset_days = ? WHERE id = ?').run(offsetDays, req.params.id);
+      if (windowDays !== undefined) db.prepare('UPDATE pathway_timepoints SET window_days = ? WHERE id = ?').run(windowDays, req.params.id);
+      if (instrumentIds !== undefined) {
+        const validInstrumentIds = new Set(
+          (
+            db.prepare('SELECT id FROM proms_instruments WHERE tenant_id = ?').all(req.user!.tenantId) as { id: string }[]
+          ).map((i) => i.id)
+        );
+        if (!Array.isArray(instrumentIds) || instrumentIds.length === 0 || !instrumentIds.every((id) => validInstrumentIds.has(id))) {
+          res.status(400).json({ error: 'invalid_instrument_id' });
+          return;
+        }
+        db.prepare('UPDATE pathway_timepoints SET instrument_ids_json = ? WHERE id = ?').run(JSON.stringify(instrumentIds), req.params.id);
+      }
+      logAudit(db, req.user!.tenantId, req.user!.id, 'timepoint_updated', 'pathway_timepoint', req.params.id, req.body);
+      res.json({ ok: true });
+    }
+  );
 
   router.get('/proms/outcomes', (req: Request, res: Response) => {
     const pathwayId = req.query.pathwayId as string | undefined;

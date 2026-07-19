@@ -53,6 +53,11 @@ export default function Login() {
             />
           </div>
           {error && <p className="text-sm text-red-600">{error}</p>}
+          <p className="text-end">
+            <Link to="/forgot-password" className="text-xs font-semibold text-slate-500 hover:underline">
+              نسيت كلمة المرور؟
+            </Link>
+          </p>
           <button
             type="submit"
             disabled={busy}

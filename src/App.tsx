@@ -1,6 +1,8 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useAuth } from './AuthContext';
 import Login from './pages/Login';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
 import Register from './pages/Register';
 import PatientSurvey from './pages/PatientSurvey';
 import KioskSurvey from './pages/KioskSurvey';
@@ -34,6 +36,8 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password/:token" element={<ResetPassword />} />
       <Route path="/register" element={<Register />} />
       <Route path="/s/:token" element={<PatientSurvey />} />
       <Route path="/k/:code" element={<KioskSurvey />} />

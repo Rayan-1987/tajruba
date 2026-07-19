@@ -55,6 +55,8 @@ CREATE TABLE IF NOT EXISTS users (
   full_name TEXT NOT NULL,
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  password_reset_token_hash TEXT,
+  password_reset_expires_at TEXT,
   UNIQUE(tenant_id, email)
 );
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
@@ -261,6 +263,11 @@ CREATE TABLE IF NOT EXISTS proms_instruments (
   name_en TEXT NOT NULL,
   license_status TEXT NOT NULL,
   description_ar TEXT NOT NULL,
+  -- Scoring metadata for instruments an admin creates through the UI, which have no hardcoded
+  -- InstrumentDefinition in scoring.ts. Seeded instruments (PHQ9, VAS_PAIN, ...) ignore these
+  -- columns and use their coded definition instead (see resolveInstrumentDefinition in api.ts).
+  higher_is_better INTEGER NOT NULL DEFAULT 0,
+  mcid_threshold REAL NOT NULL DEFAULT 1,
   UNIQUE(tenant_id, code)
 );
 CREATE INDEX IF NOT EXISTS idx_instruments_tenant ON proms_instruments(tenant_id);

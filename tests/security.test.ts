@@ -179,3 +179,127 @@ test('PII is redacted before it is ever returned by the API', async () => {
     db.close();
   }
 });
+
+test('self-service password reset: request, complete, then log in with the new password', async () => {
+  const { server, baseUrl, db } = await startServer();
+  try {
+    const forgotRes = await fetch(`${baseUrl}/api/auth/forgot-password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'department@tajruba.sa' })
+    });
+    assert.equal(forgotRes.status, 200);
+
+    // The route only ever hands back {ok:true} (to avoid leaking which emails have accounts) —
+    // the raw token exists only in the console-logged email, so recover it from the DB the same
+    // way the proms tests recover SMS-only tokens: by reaching in directly.
+    const user = db.prepare("SELECT id, password_reset_token_hash FROM users WHERE email = 'department@tajruba.sa'").get() as {
+      id: string;
+      password_reset_token_hash: string | null;
+    };
+    assert.ok(user.password_reset_token_hash, 'a reset token must have been issued');
+
+    // We cannot invert the hash, so exercise the reset endpoint's rejection paths with a
+    // fabricated token first, then complete the real flow by minting a token the same way the
+    // server does and writing its hash directly (mirroring how proms.test.ts fabricates tokens).
+    const badReset = await fetch(`${baseUrl}/api/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: 'not-a-real-token', newPassword: 'NewPassword123!' })
+    });
+    assert.equal(badReset.status, 400);
+
+    const crypto = await import('node:crypto');
+    const rawToken = 'test-reset-token-123';
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const farFuture = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    db.prepare('UPDATE users SET password_reset_token_hash = ?, password_reset_expires_at = ? WHERE id = ?').run(
+      tokenHash,
+      farFuture,
+      user.id
+    );
+
+    const shortPasswordRes = await fetch(`${baseUrl}/api/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: rawToken, newPassword: 'short' })
+    });
+    assert.equal(shortPasswordRes.status, 400);
+
+    const resetRes = await fetch(`${baseUrl}/api/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: rawToken, newPassword: 'NewPassword123!' })
+    });
+    assert.equal(resetRes.status, 200);
+
+    // The token must be single-use.
+    const reuseRes = await fetch(`${baseUrl}/api/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: rawToken, newPassword: 'AnotherPassword123!' })
+    });
+    assert.equal(reuseRes.status, 400);
+
+    // The old password must no longer work, the new one must.
+    const oldLoginRes = await fetch(`${baseUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'department@tajruba.sa', password: 'Department123!' })
+    });
+    assert.equal(oldLoginRes.status, 401);
+
+    const newLoginRes = await fetch(`${baseUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'department@tajruba.sa', password: 'NewPassword123!' })
+    });
+    assert.equal(newLoginRes.status, 200);
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
+test('a reset token past its 30-minute expiry is rejected', async () => {
+  const { server, baseUrl, db } = await startServer();
+  try {
+    const user = db.prepare("SELECT id FROM users WHERE email = 'department@tajruba.sa'").get() as { id: string };
+    const crypto = await import('node:crypto');
+    const rawToken = 'expired-reset-token';
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const past = new Date(Date.now() - 60 * 1000).toISOString();
+    db.prepare('UPDATE users SET password_reset_token_hash = ?, password_reset_expires_at = ? WHERE id = ?').run(tokenHash, past, user.id);
+
+    const res = await fetch(`${baseUrl}/api/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: rawToken, newPassword: 'SomePassword123!' })
+    });
+    assert.equal(res.status, 400);
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
+test('forgot-password never reveals whether an email address has an account', async () => {
+  const { server, baseUrl, db } = await startServer();
+  try {
+    const realRes = await fetch(`${baseUrl}/api/auth/forgot-password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@tajruba.sa' })
+    });
+    const fakeRes = await fetch(`${baseUrl}/api/auth/forgot-password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'no-such-account@tajruba.sa' })
+    });
+    assert.equal(realRes.status, fakeRes.status);
+    assert.deepEqual(await realRes.json(), await fakeRes.json());
+  } finally {
+    server.close();
+    db.close();
+  }
+});
