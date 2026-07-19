@@ -1528,26 +1528,41 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     const category = req.query.category as string | undefined;
     const severityMin = req.query.severityMin ? Number(req.query.severityMin) : undefined;
     const unacknowledgedOnly = req.query.unacknowledgedOnly === 'true';
+    const serviceType = req.query.serviceType as string | undefined;
+    const providerName = req.query.providerName as string | undefined;
 
     const rows = db
       .prepare(
         `SELECT c.id, c.department_id, c.redacted_text, c.created_at,
                 ca.sentiment, ca.category, ca.severity,
                 src.id as case_id, src.status as case_status, src.assigned_to, src.resolution_notes,
-                al.id as alert_id, al.acknowledged as alert_acknowledged
+                al.id as alert_id, al.acknowledged as alert_acknowledged,
+                d.name_ar as department_name_ar, d.service_type, si.provider_name
          FROM comments c
          JOIN comment_analyses ca ON ca.comment_id = c.id
+         JOIN departments d ON d.id = c.department_id
+         JOIN survey_responses sr ON sr.id = c.response_id
+         JOIN survey_invitations si ON si.id = sr.invitation_id
          LEFT JOIN service_recovery_cases src ON src.comment_id = c.id
          LEFT JOIN comment_alerts al ON al.comment_id = c.id
          WHERE c.tenant_id = ? ${clause}
          ${category ? 'AND ca.category = ?' : ''}
          ${severityMin !== undefined ? 'AND ca.severity >= ?' : ''}
          ${unacknowledgedOnly ? "AND al.id IS NOT NULL AND al.acknowledged = 0" : ''}
+         ${serviceType ? 'AND d.service_type = ?' : ''}
+         ${providerName ? 'AND si.provider_name LIKE ?' : ''}
          ORDER BY c.created_at DESC
          LIMIT 200`
       )
       .all(
-        ...[req.user!.tenantId, ...params, ...(category ? [category] : []), ...(severityMin !== undefined ? [severityMin] : [])]
+        ...[
+          req.user!.tenantId,
+          ...params,
+          ...(category ? [category] : []),
+          ...(severityMin !== undefined ? [severityMin] : []),
+          ...(serviceType ? [serviceType] : []),
+          ...(providerName ? [`%${providerName}%`] : [])
+        ]
       );
     res.json({ comments: rows });
   });
@@ -1756,11 +1771,12 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     requireRole('SystemAdmin', 'QualityManager', 'DepartmentManager'),
     express.json({ limit: '256kb' }),
     async (req: Request, res: Response) => {
-      const { rows, templateId, departmentId, channel } = req.body as {
+      const { rows, templateId, departmentId, channel, providerName } = req.body as {
         rows?: { phone: string }[];
         templateId?: string;
         departmentId?: string;
         channel?: 'sms' | 'whatsapp' | 'phone';
+        providerName?: string;
       };
       if (!Array.isArray(rows) || rows.length === 0 || !templateId || !departmentId) {
         res.status(400).json({ error: 'invalid_payload' });
@@ -1785,8 +1801,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
 
       const insert = db.prepare(
         `INSERT INTO survey_invitations
-         (id, tenant_id, template_id, department_id, service_type, token_hash, patient_phone_hash, channel, status, expires_at, sent_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, tenant_id, template_id, department_id, service_type, token_hash, patient_phone_hash, channel, status, expires_at, sent_at, provider_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
       const now = new Date().toISOString();
       const expires = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
@@ -1820,7 +1836,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
           effectiveChannel,
           status,
           expires,
-          now
+          now,
+          providerName?.trim() || null
         );
         created += 1;
       }
@@ -1920,6 +1937,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         answers?: { questionId: string; value: number }[];
         comment?: string;
         contactOptIn?: boolean;
+        providerName?: string;
       };
       if (!body.templateId || !body.departmentId || !body.patientPhone || !Array.isArray(body.answers)) {
         res.status(400).json({ error: 'invalid_payload' });
@@ -1958,9 +1976,21 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       const invitationId = uid();
       db.prepare(
         `INSERT INTO survey_invitations
-         (id, tenant_id, template_id, department_id, service_type, token_hash, patient_phone_hash, channel, status, expires_at, sent_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'phone', 'completed', ?, ?, ?)`
-      ).run(invitationId, req.user!.tenantId, template.id, body.departmentId, template.service_type, sha256(uid()), sha256(body.patientPhone), now, now, now);
+         (id, tenant_id, template_id, department_id, service_type, token_hash, patient_phone_hash, channel, status, expires_at, sent_at, created_at, provider_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'phone', 'completed', ?, ?, ?, ?)`
+      ).run(
+        invitationId,
+        req.user!.tenantId,
+        template.id,
+        body.departmentId,
+        template.service_type,
+        sha256(uid()),
+        sha256(body.patientPhone),
+        now,
+        now,
+        now,
+        body.providerName?.trim() || null
+      );
 
       const responseId = uid();
       db.prepare(

@@ -131,7 +131,11 @@ CREATE TABLE IF NOT EXISTS survey_invitations (
   status TEXT NOT NULL DEFAULT 'pending',
   expires_at TEXT NOT NULL,
   sent_at TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- Free-text name of the treating clinician/provider, captured at invite time (bulk SMS batch
+  -- or phone-survey entry) so comments can be grouped by who provided the care, not just which
+  -- department. Optional — kiosk/QR submissions are anonymous walk-ups with no known provider.
+  provider_name TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_invitations_tenant ON survey_invitations(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_invitations_token ON survey_invitations(token_hash);

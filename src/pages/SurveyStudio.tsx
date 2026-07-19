@@ -37,6 +37,7 @@ export default function SurveyStudio() {
   const [departmentId, setDepartmentId] = useState('');
   const [channel, setChannel] = useState<'sms' | 'whatsapp' | 'phone'>('sms');
   const [phones, setPhones] = useState('');
+  const [providerName, setProviderName] = useState('');
   const [result, setResult] = useState<string | null>(null);
 
   useEffect(() => {
@@ -54,7 +55,13 @@ export default function SurveyStudio() {
       setResult('يرجى اختيار القالب والقسم وإدخال أرقام جوال.');
       return;
     }
-    const res = await api.post<{ created: number }>('/invitations/bulk', { templateId, departmentId, channel, rows });
+    const res = await api.post<{ created: number }>('/invitations/bulk', {
+      templateId,
+      departmentId,
+      channel,
+      rows,
+      providerName: providerName.trim() || undefined
+    });
     setResult(`تم إنشاء ${res.created} دعوة استبيان بنجاح.`);
     setPhones('');
   };
@@ -90,6 +97,12 @@ export default function SurveyStudio() {
             <option value="whatsapp">واتساب</option>
             <option value="phone">اتصال هاتفي</option>
           </select>
+          <input
+            value={providerName}
+            onChange={(e) => setProviderName(e.target.value)}
+            placeholder="مقدّم الخدمة / الطبيب المعالج (اختياري)"
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm md:col-span-3"
+          />
         </div>
         <textarea
           value={phones}

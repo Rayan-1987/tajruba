@@ -26,6 +26,7 @@ export default function PhoneSurvey() {
   const [templateId, setTemplateId] = useState('');
   const [departmentId, setDepartmentId] = useState(user?.departmentId ?? '');
   const [patientPhone, setPatientPhone] = useState('');
+  const [providerName, setProviderName] = useState('');
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [comment, setComment] = useState('');
   const [contactOptIn, setContactOptIn] = useState(false);
@@ -53,6 +54,7 @@ export default function PhoneSurvey() {
     setAnswers({});
     setComment('');
     setPatientPhone('');
+    setProviderName('');
     setContactOptIn(false);
   };
 
@@ -68,6 +70,7 @@ export default function PhoneSurvey() {
         templateId,
         departmentId,
         patientPhone,
+        providerName: providerName.trim() || undefined,
         answers: Object.entries(answers)
           .filter(([questionId]) => visibleIds.has(questionId))
           .map(([questionId, value]) => ({ questionId, value })),
@@ -118,6 +121,12 @@ export default function PhoneSurvey() {
             onChange={(e) => setPatientPhone(e.target.value)}
             placeholder="رقم جوال المريض"
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          />
+          <input
+            value={providerName}
+            onChange={(e) => setProviderName(e.target.value)}
+            placeholder="مقدّم الخدمة / الطبيب المعالج (اختياري)"
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm md:col-span-3"
           />
         </div>
       </div>
