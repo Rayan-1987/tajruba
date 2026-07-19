@@ -111,6 +111,49 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+export interface RatingDistribution {
+  veryGoodPercent: number;
+  goodPercent: number;
+  fairPercent: number;
+  poorPercent: number;
+  veryPoorPercent: number;
+}
+
+/** Buckets raw 1-5 Likert values into Very Good/Good/Fair/Poor/Very Poor percentages. */
+export function scoreDistribution(values: number[]): RatingDistribution | null {
+  const clean = values.filter((v) => Number.isFinite(v));
+  const n = clean.length;
+  if (n === 0) return null;
+  const pct = (target: number) => round2((clean.filter((v) => v === target).length / n) * 100);
+  return {
+    veryGoodPercent: pct(5),
+    goodPercent: pct(4),
+    fairPercent: pct(3),
+    poorPercent: pct(2),
+    veryPoorPercent: pct(1)
+  };
+}
+
+/** Pearson correlation coefficient over paired (questionValue, overallValue) observations. */
+export function pearsonCorrelation(pairs: [number, number][]): number | null {
+  const n = pairs.length;
+  if (n < 2) return null;
+  const meanX = pairs.reduce((sum, [x]) => sum + x, 0) / n;
+  const meanY = pairs.reduce((sum, [, y]) => sum + y, 0) / n;
+  let num = 0;
+  let denomX = 0;
+  let denomY = 0;
+  for (const [x, y] of pairs) {
+    const dx = x - meanX;
+    const dy = y - meanY;
+    num += dx * dy;
+    denomX += dx * dx;
+    denomY += dy * dy;
+  }
+  if (denomX === 0 || denomY === 0) return null;
+  return round2(num / Math.sqrt(denomX * denomY));
+}
+
 // ---------------------------------------------------------------------------
 // PROMs instrument scoring
 // ---------------------------------------------------------------------------

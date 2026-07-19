@@ -11,6 +11,7 @@ import PatientPromsForm from './pages/PatientPromsForm';
 import PatientPromsOptOut from './pages/PatientPromsOptOut';
 import DashboardLayout from './pages/DashboardLayout';
 import Reports from './pages/Reports';
+import ReportsPrint from './pages/ReportsPrint';
 import CommentsIntelligence from './pages/CommentsIntelligence';
 import ServiceRecovery from './pages/ServiceRecovery';
 import PromsMonitor from './pages/PromsMonitor';
@@ -66,6 +67,14 @@ export default function App() {
       <Route path="/k/:code" element={<KioskSurvey />} />
       <Route path="/p/:token" element={<PatientPromsForm />} />
       <Route path="/p/:token/opt-out" element={<PatientPromsOptOut />} />
+      <Route
+        path="/dashboard/reports/print"
+        element={
+          <ProtectedRoutes>
+            <ReportsPrint />
+          </ProtectedRoutes>
+        }
+      />
       <Route
         path="/dashboard"
         element={

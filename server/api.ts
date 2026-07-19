@@ -19,6 +19,8 @@ import {
   PUBLIC_REPORTING_SAMPLE_THRESHOLD,
   RELIABLE_SAMPLE_THRESHOLD,
   SMALL_SAMPLE_THRESHOLD,
+  pearsonCorrelation,
+  scoreDistribution,
   scoreDomain,
   scoreInstrument,
   scoreNps,
@@ -1112,7 +1114,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       .all(req.user!.tenantId);
     const questions = db
       .prepare(
-        `SELECT id, code, domain_id, text_ar, text_en, answer_type, service_type, requires_alert, active FROM questions
+        `SELECT id, code, domain_id, text_ar, text_en, answer_type, service_type, requires_alert, active, is_custom, cahps_item FROM questions
          WHERE tenant_id = ? ${includeInactive ? '' : 'AND active = 1'} ORDER BY sort_order`
       )
       .all(req.user!.tenantId);
@@ -1171,7 +1173,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
   );
 
   router.post('/question-bank/questions', requireRole('SystemAdmin'), express.json({ limit: '8kb' }), (req: Request, res: Response) => {
-    const { code, domainId, textAr, textEn, type, requiresAlert, dependsOnCode } = req.body as {
+    const { code, domainId, textAr, textEn, type, requiresAlert, dependsOnCode, isCustom, cahpsItem } = req.body as {
       code?: string;
       domainId?: string;
       textAr?: string;
@@ -1179,6 +1181,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       type?: AnswerType;
       requiresAlert?: boolean;
       dependsOnCode?: string;
+      isCustom?: boolean;
+      cahpsItem?: boolean;
     };
     if (!code || !domainId || !textAr || !textEn || !type) {
       res.status(400).json({ error: 'invalid_payload' });
@@ -1202,9 +1206,25 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     try {
       db.prepare(
         `INSERT INTO questions
-         (id, tenant_id, code, domain_id, text_ar, text_en, answer_type, service_type, requires_alert, sort_order, depends_on_code)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).run(id, req.user!.tenantId, code, domainId, textAr, textEn, type, domain.service_type, requiresAlert ? 1 : 0, nextSortOrder, dependsOnCode ?? null);
+         (id, tenant_id, code, domain_id, text_ar, text_en, answer_type, service_type, requires_alert, sort_order, depends_on_code, is_custom, cahps_item)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        // Admin-created questions default to "custom" (dagger-marked in reports) since they are
+        // local additions, not part of the standardized core bank — the admin can override this.
+      ).run(
+        id,
+        req.user!.tenantId,
+        code,
+        domainId,
+        textAr,
+        textEn,
+        type,
+        domain.service_type,
+        requiresAlert ? 1 : 0,
+        nextSortOrder,
+        dependsOnCode ?? null,
+        isCustom === false ? 0 : 1,
+        cahpsItem ? 1 : 0
+      );
     } catch {
       res.status(409).json({ error: 'code_already_exists' });
       return;
@@ -1236,16 +1256,20 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         res.status(404).json({ error: 'not_found' });
         return;
       }
-      const { textAr, textEn, requiresAlert, active } = req.body as {
+      const { textAr, textEn, requiresAlert, active, isCustom, cahpsItem } = req.body as {
         textAr?: string;
         textEn?: string;
         requiresAlert?: boolean;
         active?: boolean;
+        isCustom?: boolean;
+        cahpsItem?: boolean;
       };
       if (textAr !== undefined) db.prepare('UPDATE questions SET text_ar = ? WHERE id = ?').run(textAr, req.params.id);
       if (textEn !== undefined) db.prepare('UPDATE questions SET text_en = ? WHERE id = ?').run(textEn, req.params.id);
       if (requiresAlert !== undefined) db.prepare('UPDATE questions SET requires_alert = ? WHERE id = ?').run(requiresAlert ? 1 : 0, req.params.id);
       if (active !== undefined) db.prepare('UPDATE questions SET active = ? WHERE id = ?').run(active ? 1 : 0, req.params.id);
+      if (isCustom !== undefined) db.prepare('UPDATE questions SET is_custom = ? WHERE id = ?').run(isCustom ? 1 : 0, req.params.id);
+      if (cahpsItem !== undefined) db.prepare('UPDATE questions SET cahps_item = ? WHERE id = ?').run(cahpsItem ? 1 : 0, req.params.id);
       logAudit(db, req.user!.tenantId, req.user!.id, 'question_updated', 'question', req.params.id, req.body);
       res.json({ ok: true });
     }
@@ -1397,6 +1421,61 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
   // -------------------------------------------------------------------------
   // Reports (PREMs)
   // -------------------------------------------------------------------------
+
+  // Shared helper: raw numeric answer values for one question, optionally scoped to a
+  // department and/or a submission-date window. Reused by scores/trend/priority-index/
+  // departments-breakdown so each report view stays consistent with the others.
+  function fetchQuestionValues(
+    tenantId: string,
+    questionId: string,
+    deptId: string | null | undefined,
+    dateFrom?: string,
+    dateTo?: string
+  ): number[] {
+    const params: string[] = [questionId, tenantId];
+    let sql = `SELECT a.value_numeric as v FROM answers a
+               JOIN survey_responses r ON r.id = a.response_id
+               WHERE a.question_id = ? AND r.tenant_id = ?`;
+    if (deptId) {
+      sql += ' AND EXISTS (SELECT 1 FROM survey_invitations si WHERE si.id = r.invitation_id AND si.department_id = ?)';
+      params.push(deptId);
+    }
+    if (dateFrom) {
+      sql += ' AND r.submitted_at >= ?';
+      params.push(dateFrom);
+    }
+    if (dateTo) {
+      sql += ' AND r.submitted_at < ?';
+      params.push(dateTo);
+    }
+    return (db.prepare(sql).all(...params) as { v: number }[]).map((r) => r.v);
+  }
+
+  /** A single number summarizing one answer type, matching each type's primary reported metric. */
+  function primaryMetric(answerType: AnswerType, values: number[]): number | null {
+    if (answerType === 'nps') return scoreNps(values).score;
+    if (answerType === 'yesno') return scoreYesNo(values).yesPercent;
+    if (answerType === 'likert5') return scoreQuestion('', values).topBoxPercent;
+    return null;
+  }
+
+  // Rolling 3-month windows (not calendar quarters) used for "vs last period" / "12-month
+  // change" deltas, so the comparison always has a full window of data regardless of today's date.
+  function rollingWindows(): { curFrom: string; curTo: string; prevFrom: string; prevTo: string; yearFrom: string; yearTo: string } {
+    const now = new Date();
+    const iso = (d: Date) => d.toISOString();
+    const curTo = now;
+    const curFrom = new Date(now);
+    curFrom.setMonth(curFrom.getMonth() - 3);
+    const prevFrom = new Date(now);
+    prevFrom.setMonth(prevFrom.getMonth() - 6);
+    const yearTo = new Date(now);
+    yearTo.setMonth(yearTo.getMonth() - 12);
+    const yearFrom = new Date(now);
+    yearFrom.setMonth(yearFrom.getMonth() - 15);
+    return { curFrom: iso(curFrom), curTo: iso(curTo), prevFrom: iso(prevFrom), prevTo: iso(curFrom), yearFrom: iso(yearFrom), yearTo: iso(yearTo) };
+  }
+
   router.get('/reports/scores', (req: Request, res: Response) => {
     const serviceType = req.query.serviceType as ServiceType | undefined;
     const departmentId = req.query.departmentId as string | undefined;
@@ -1406,6 +1485,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       return;
     }
     const effectiveDeptId = req.user!.role === 'DepartmentManager' ? req.user!.departmentId : departmentId;
+    const windows = rollingWindows();
 
     const domains = db
       .prepare(
@@ -1423,53 +1503,60 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
 
     const results = domains.map((domain) => {
       const questions = db
-        .prepare('SELECT id, code, text_ar, text_en, answer_type FROM questions WHERE domain_id = ? AND active = 1 ORDER BY sort_order')
-        .all(domain.id) as { id: string; code: string; text_ar: string; text_en: string; answer_type: AnswerType }[];
+        .prepare(
+          'SELECT id, code, text_ar, text_en, answer_type, is_custom, cahps_item FROM questions WHERE domain_id = ? AND active = 1 ORDER BY sort_order'
+        )
+        .all(domain.id) as {
+        id: string;
+        code: string;
+        text_ar: string;
+        text_en: string;
+        answer_type: AnswerType;
+        is_custom: number;
+        cahps_item: number;
+      }[];
 
       const questionScores = questions.map((q) => {
-        const values = (
-          db
-            .prepare(
-              `SELECT a.value_numeric as v FROM answers a
-               JOIN survey_responses r ON r.id = a.response_id
-               WHERE a.question_id = ? AND r.tenant_id = ?
-               ${effectiveDeptId ? 'AND EXISTS (SELECT 1 FROM survey_invitations si WHERE si.id = r.invitation_id AND si.department_id = ?)' : ''}`
-            )
-            .all(...(effectiveDeptId ? [q.id, req.user!.tenantId, effectiveDeptId] : [q.id, req.user!.tenantId])) as { v: number }[]
-        ).map((r) => r.v);
+        const values = fetchQuestionValues(req.user!.tenantId, q.id, effectiveDeptId);
+        const isCustom = q.is_custom === 1;
+        const cahpsItem = q.cahps_item === 1;
 
+        const curValues = fetchQuestionValues(req.user!.tenantId, q.id, effectiveDeptId, windows.curFrom, windows.curTo);
+        const prevValues = fetchQuestionValues(req.user!.tenantId, q.id, effectiveDeptId, windows.prevFrom, windows.prevTo);
+        const yearAgoValues = fetchQuestionValues(req.user!.tenantId, q.id, effectiveDeptId, windows.yearFrom, windows.yearTo);
+        const curMetric = primaryMetric(q.answer_type, curValues);
+        const prevMetric = primaryMetric(q.answer_type, prevValues);
+        const yearAgoMetric = primaryMetric(q.answer_type, yearAgoValues);
+        const vsLastPeriod = curMetric != null && prevMetric != null ? round2(curMetric - prevMetric) : null;
+        const vs12MonthsAgo = curMetric != null && yearAgoMetric != null ? round2(curMetric - yearAgoMetric) : null;
+        const distribution = q.answer_type === 'likert5' ? scoreDistribution(values) : null;
+
+        const base = { ...q, isCustom, cahpsItem, distribution, vsLastPeriod, vs12MonthsAgo };
         if (q.answer_type === 'nps') {
           const nps = scoreNps(values);
-          return { ...q, n: nps.n, mean: null, topBoxPercent: null, npsScore: nps.score, yesPercent: null };
+          return { ...base, n: nps.n, mean: null, topBoxPercent: null, npsScore: nps.score, yesPercent: null };
         }
         if (q.answer_type === 'yesno') {
           const yesNo = scoreYesNo(values);
-          return { ...q, n: yesNo.n, mean: null, topBoxPercent: null, npsScore: null, yesPercent: yesNo.yesPercent };
+          return { ...base, n: yesNo.n, mean: null, topBoxPercent: null, npsScore: null, yesPercent: yesNo.yesPercent };
         }
         const score = scoreQuestion(q.id, values);
-        return { ...q, ...score, npsScore: null, yesPercent: null };
+        return { ...base, ...score, npsScore: null, yesPercent: null };
       });
 
       const allDomainValues = questionScores
         .filter((q) => q.answer_type !== 'nps' && q.answer_type !== 'yesno')
-        .flatMap((q) => {
-          const values = (
-            db
-              .prepare(
-                `SELECT a.value_numeric as v FROM answers a
-                 JOIN survey_responses r ON r.id = a.response_id
-                 WHERE a.question_id = ? AND r.tenant_id = ?
-                 ${effectiveDeptId ? 'AND EXISTS (SELECT 1 FROM survey_invitations si WHERE si.id = r.invitation_id AND si.department_id = ?)' : ''}`
-              )
-              .all(...(effectiveDeptId ? [q.id, req.user!.tenantId, effectiveDeptId] : [q.id, req.user!.tenantId])) as { v: number }[]
-          ).map((r) => r.v);
-          return values;
-        });
+        .flatMap((q) => fetchQuestionValues(req.user!.tenantId, q.id, effectiveDeptId));
 
       const domainScore = scoreDomain(domain.id, allDomainValues, domain.benchmark_top_box_percent);
+      const benchmarks = db
+        .prepare('SELECT peer_group_name as peerGroupName, value FROM external_benchmarks WHERE domain_id = ? ORDER BY peer_group_name')
+        .all(domain.id) as { peerGroupName: string; value: number }[];
+
       return {
         domain: { id: domain.id, code: domain.code, nameAr: domain.name_ar, nameEn: domain.name_en, serviceType: domain.service_type },
         score: domainScore,
+        benchmarks,
         questions: questionScores
       };
     });
@@ -1482,7 +1569,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     });
   });
 
-  const TREND_PERIOD_EXPR: Record<'month' | 'quarter' | 'half' | 'year', string> = {
+  const TREND_PERIOD_EXPR: Record<'day' | 'month' | 'quarter' | 'half' | 'year', string> = {
+    day: "strftime('%Y-%m-%d', r.submitted_at)",
     month: "strftime('%Y-%m', r.submitted_at)",
     quarter: "strftime('%Y', r.submitted_at) || '-Q' || ((CAST(strftime('%m', r.submitted_at) AS INTEGER) - 1) / 3 + 1)",
     half: "strftime('%Y', r.submitted_at) || '-H' || ((CAST(strftime('%m', r.submitted_at) AS INTEGER) - 1) / 6 + 1)",
@@ -1493,7 +1581,12 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     const serviceType = req.query.serviceType as ServiceType | undefined;
     const departmentId = req.user!.role === 'DepartmentManager' ? req.user!.departmentId : (req.query.departmentId as string | undefined);
     const periodParam = req.query.period as string | undefined;
-    const period = periodParam && periodParam in TREND_PERIOD_EXPR ? (periodParam as keyof typeof TREND_PERIOD_EXPR) : 'month';
+    // A custom date range (from/to) implies day-level bucketing unless the caller explicitly
+    // asked for a coarser one (e.g. month buckets within a custom multi-year range).
+    const from = req.query.from as string | undefined;
+    const to = req.query.to as string | undefined;
+    const defaultPeriod = from || to ? 'day' : 'month';
+    const period = periodParam && periodParam in TREND_PERIOD_EXPR ? (periodParam as keyof typeof TREND_PERIOD_EXPR) : defaultPeriod;
     const periodExpr = TREND_PERIOD_EXPR[period];
 
     const rows = db
@@ -1508,16 +1601,300 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
          WHERE r.tenant_id = ? AND q.answer_type = 'likert5'
          ${serviceType ? 'AND q.service_type = ?' : ''}
          ${departmentId ? 'AND si.department_id = ?' : ''}
+         ${from ? 'AND r.submitted_at >= ?' : ''}
+         ${to ? 'AND r.submitted_at < ?' : ''}
          GROUP BY period ORDER BY period`
       )
       .all(
-        ...[req.user!.tenantId, ...(serviceType ? [serviceType] : []), ...(departmentId ? [departmentId] : [])]
+        ...[
+          req.user!.tenantId,
+          ...(serviceType ? [serviceType] : []),
+          ...(departmentId ? [departmentId] : []),
+          ...(from ? [from] : []),
+          ...(to ? [to] : [])
+        ]
       ) as { period: string; mean: number; topBoxPercent: number; n: number }[];
 
     res.json({
       period,
       trend: rows.map((r) => ({ ...r, mean: round2(r.mean), topBoxPercent: round2(r.topBoxPercent) }))
     });
+  });
+
+  // Priority Index: ranks questions by how strongly they correlate with the service's overall
+  // rating question, combined with sample size — a driver/impact analysis matching the
+  // "high-importance, low-performance" table found in external PREMs reports. There is no
+  // stored "overall" flag; each service's Overall Assessment domain (code ending "_OVR")
+  // contains a likert5 "overall rating" item that serves as the criterion variable.
+  router.get('/reports/priority-index', (req: Request, res: Response) => {
+    const serviceType = req.query.serviceType as ServiceType | undefined;
+    const departmentId = req.query.departmentId as string | undefined;
+    if (!serviceType) {
+      res.status(400).json({ error: 'service_type_required' });
+      return;
+    }
+    if (req.user!.role === 'DepartmentManager' && departmentId && departmentId !== req.user!.departmentId) {
+      res.status(403).json({ error: 'forbidden' });
+      return;
+    }
+    const effectiveDeptId = req.user!.role === 'DepartmentManager' ? req.user!.departmentId : departmentId;
+
+    const overallDomain = db
+      .prepare("SELECT id FROM question_domains WHERE tenant_id = ? AND service_type = ? AND code LIKE '%\\_OVR' ESCAPE '\\'")
+      .get(req.user!.tenantId, serviceType) as { id: string } | undefined;
+    const criterionQuestion = overallDomain
+      ? (db
+          .prepare("SELECT id FROM questions WHERE domain_id = ? AND answer_type = 'likert5' AND active = 1 ORDER BY sort_order LIMIT 1")
+          .get(overallDomain.id) as { id: string } | undefined)
+      : undefined;
+    if (!criterionQuestion) {
+      res.json({ criterionQuestionId: null, items: [] });
+      return;
+    }
+
+    const candidates = db
+      .prepare(
+        `SELECT q.id, q.code, q.text_ar, q.text_en, q.answer_type, q.is_custom, q.cahps_item,
+                d.name_ar as domain_name_ar, d.name_en as domain_name_en
+         FROM questions q JOIN question_domains d ON d.id = q.domain_id
+         WHERE q.tenant_id = ? AND q.service_type = ? AND q.active = 1 AND q.id != ?`
+      )
+      .all(req.user!.tenantId, serviceType, criterionQuestion.id) as {
+      id: string;
+      code: string;
+      text_ar: string;
+      text_en: string;
+      answer_type: AnswerType;
+      is_custom: number;
+      cahps_item: number;
+      domain_name_ar: string;
+      domain_name_en: string;
+    }[];
+
+    const items = candidates
+      .map((q) => {
+        let sql = `SELECT a_cand.value_numeric as x, a_crit.value_numeric as y
+                    FROM answers a_cand
+                    JOIN answers a_crit ON a_crit.response_id = a_cand.response_id AND a_crit.question_id = ?
+                    JOIN survey_responses r ON r.id = a_cand.response_id
+                    WHERE a_cand.question_id = ? AND r.tenant_id = ?`;
+        const params: string[] = [criterionQuestion.id, q.id, req.user!.tenantId];
+        if (effectiveDeptId) {
+          sql += ' AND EXISTS (SELECT 1 FROM survey_invitations si WHERE si.id = r.invitation_id AND si.department_id = ?)';
+          params.push(effectiveDeptId);
+        }
+        const rows = db.prepare(sql).all(...params) as { x: number; y: number }[];
+        const correlation = pearsonCorrelation(rows.map((r) => [r.x, r.y] as [number, number]));
+        const values = rows.map((r) => r.x);
+        const n = values.length;
+        const mean = primaryMetric(q.answer_type, values);
+        return {
+          id: q.id,
+          code: q.code,
+          textAr: q.text_ar,
+          textEn: q.text_en,
+          answerType: q.answer_type,
+          isCustom: q.is_custom === 1,
+          cahpsItem: q.cahps_item === 1,
+          domainNameAr: q.domain_name_ar,
+          domainNameEn: q.domain_name_en,
+          n,
+          mean,
+          correlation
+        };
+      })
+      .filter((item) => item.correlation != null && item.n >= SMALL_SAMPLE_THRESHOLD)
+      .sort((a, b) => (b.correlation ?? 0) - (a.correlation ?? 0))
+      .slice(0, 15);
+
+    res.json({ criterionQuestionId: criterionQuestion.id, items });
+  });
+
+  // Departments/units breakdown + variance analysis: compares every department within one
+  // service line on the same "overall rating" criterion question, for identifying units that
+  // are above/below the organizational average and improving/declining vs. the last period —
+  // matching external reports' Units Breakdown + Variance Analysis quadrant view. A
+  // DepartmentManager never sees other departments anywhere else in the app, so this
+  // cross-department comparison is restricted to roles that already have that visibility.
+  router.get('/reports/departments-breakdown', (req: Request, res: Response) => {
+    const serviceType = req.query.serviceType as ServiceType | undefined;
+    if (!serviceType) {
+      res.status(400).json({ error: 'service_type_required' });
+      return;
+    }
+    if (req.user!.role === 'DepartmentManager') {
+      res.status(403).json({ error: 'forbidden' });
+      return;
+    }
+
+    const overallDomain = db
+      .prepare("SELECT id FROM question_domains WHERE tenant_id = ? AND service_type = ? AND code LIKE '%\\_OVR' ESCAPE '\\'")
+      .get(req.user!.tenantId, serviceType) as { id: string } | undefined;
+    const criterionQuestion = overallDomain
+      ? (db
+          .prepare("SELECT id FROM questions WHERE domain_id = ? AND answer_type = 'likert5' AND active = 1 ORDER BY sort_order LIMIT 1")
+          .get(overallDomain.id) as { id: string } | undefined)
+      : undefined;
+    if (!criterionQuestion) {
+      res.json({ orgAverageTopBoxPercent: null, departments: [] });
+      return;
+    }
+
+    const departments = db
+      .prepare('SELECT id, name_ar, name_en FROM departments WHERE tenant_id = ? AND service_type = ? AND active = 1')
+      .all(req.user!.tenantId, serviceType) as { id: string; name_ar: string; name_en: string }[];
+
+    const windows = rollingWindows();
+    const orgCurrentValues = fetchQuestionValues(req.user!.tenantId, criterionQuestion.id, undefined, windows.curFrom, windows.curTo);
+    const orgAvg = primaryMetric('likert5', orgCurrentValues);
+    const monthExpr = TREND_PERIOD_EXPR.month;
+
+    const results = departments.map((dept) => {
+      const curValues = fetchQuestionValues(req.user!.tenantId, criterionQuestion.id, dept.id, windows.curFrom, windows.curTo);
+      const prevValues = fetchQuestionValues(req.user!.tenantId, criterionQuestion.id, dept.id, windows.prevFrom, windows.prevTo);
+      const curMetric = primaryMetric('likert5', curValues);
+      const prevMetric = primaryMetric('likert5', prevValues);
+      const change = curMetric != null && prevMetric != null ? round2(curMetric - prevMetric) : null;
+      const deviation = curMetric != null && orgAvg != null ? round2(curMetric - orgAvg) : null;
+
+      const sparkRows = db
+        .prepare(
+          `SELECT ${monthExpr} as period, AVG(CASE WHEN a.value_numeric >= 5 THEN 100.0 ELSE 0.0 END) as topBoxPercent, COUNT(*) as n
+           FROM answers a
+           JOIN survey_responses r ON r.id = a.response_id
+           JOIN survey_invitations si ON si.id = r.invitation_id
+           WHERE a.question_id = ? AND r.tenant_id = ? AND si.department_id = ?
+           GROUP BY period ORDER BY period DESC LIMIT 6`
+        )
+        .all(criterionQuestion.id, req.user!.tenantId, dept.id) as { period: string; topBoxPercent: number; n: number }[];
+      const trend = sparkRows.reverse().map((r) => ({ period: r.period, topBoxPercent: round2(r.topBoxPercent), n: r.n }));
+
+      return {
+        departmentId: dept.id,
+        departmentNameAr: dept.name_ar,
+        departmentNameEn: dept.name_en,
+        n: curValues.length,
+        currentTopBoxPercent: curMetric,
+        previousTopBoxPercent: prevMetric,
+        changeVsPreviousPeriod: change,
+        deviationVsOrgAverage: deviation,
+        trend
+      };
+    });
+
+    res.json({ orgAverageTopBoxPercent: orgAvg, smallSampleThreshold: SMALL_SAMPLE_THRESHOLD, departments: results });
+  });
+
+  // Report parameters/audit block: the filters, thresholds and facility scope in effect for
+  // the current report view, plus a "selected sites" list of departments included — an
+  // audit-trail summary matching the parameter header page of external PREMs reports.
+  router.get('/reports/parameters', (req: Request, res: Response) => {
+    const serviceType = req.query.serviceType as ServiceType | undefined;
+    const departmentId = req.query.departmentId as string | undefined;
+    const effectiveDeptId = req.user!.role === 'DepartmentManager' ? req.user!.departmentId : departmentId;
+
+    if (req.user!.role === 'DepartmentManager' && departmentId && departmentId !== req.user!.departmentId) {
+      res.status(403).json({ error: 'forbidden' });
+      return;
+    }
+
+    const tenant = db.prepare('SELECT name_ar, name_en FROM tenants WHERE id = ?').get(req.user!.tenantId) as
+      | { name_ar: string; name_en: string }
+      | undefined;
+
+    const departmentsIncluded = db
+      .prepare(
+        `SELECT d.id, d.name_ar as departmentNameAr, d.name_en as departmentNameEn, d.service_type as serviceType,
+                f.name_ar as facilityNameAr, f.name_en as facilityNameEn
+         FROM departments d JOIN facilities f ON f.id = d.facility_id
+         WHERE d.tenant_id = ? AND d.active = 1
+         ${serviceType ? 'AND d.service_type = ?' : ''}
+         ${effectiveDeptId ? 'AND d.id = ?' : ''}
+         ORDER BY d.service_type, d.name_ar`
+      )
+      .all(...[req.user!.tenantId, ...(serviceType ? [serviceType] : []), ...(effectiveDeptId ? [effectiveDeptId] : [])]);
+
+    res.json({
+      tenantNameAr: tenant?.name_ar ?? null,
+      tenantNameEn: tenant?.name_en ?? null,
+      generatedAt: new Date().toISOString(),
+      filters: {
+        serviceType: serviceType ?? null,
+        departmentId: effectiveDeptId ?? null,
+        period: (req.query.period as string | undefined) ?? null,
+        from: (req.query.from as string | undefined) ?? null,
+        to: (req.query.to as string | undefined) ?? null
+      },
+      thresholds: {
+        smallSampleThreshold: SMALL_SAMPLE_THRESHOLD,
+        reliableSampleThreshold: RELIABLE_SAMPLE_THRESHOLD,
+        publicReportingSampleThreshold: PUBLIC_REPORTING_SAMPLE_THRESHOLD
+      },
+      departmentsIncluded
+    });
+  });
+
+  // External peer-group benchmarks (admin-maintained). There is no live external benchmarking
+  // data feed (no subscription to a real peer-group database), so these are manually entered
+  // reference values shown alongside our own internal scores for named peer groups such as
+  // "All PG Database" or "GCC" — a practical stand-in for the real thing.
+  router.get('/reports/benchmarks', requireRole('SystemAdmin', 'QualityManager'), (req: Request, res: Response) => {
+    const domainId = req.query.domainId as string | undefined;
+    const rows = db
+      .prepare(
+        `SELECT eb.id, eb.domain_id as domainId, eb.peer_group_name as peerGroupName, eb.value, eb.updated_at as updatedAt,
+                d.name_ar as domainNameAr, d.name_en as domainNameEn, d.service_type as serviceType
+         FROM external_benchmarks eb JOIN question_domains d ON d.id = eb.domain_id
+         WHERE d.tenant_id = ? ${domainId ? 'AND eb.domain_id = ?' : ''}
+         ORDER BY d.service_type, d.name_ar, eb.peer_group_name`
+      )
+      .all(...(domainId ? [req.user!.tenantId, domainId] : [req.user!.tenantId]));
+    res.json({ benchmarks: rows });
+  });
+
+  router.post('/reports/benchmarks', requireRole('SystemAdmin', 'QualityManager'), express.json({ limit: '4kb' }), (req: Request, res: Response) => {
+    const { domainId, peerGroupName, value } = req.body as { domainId?: string; peerGroupName?: string; value?: number };
+    if (!domainId || !peerGroupName || typeof value !== 'number') {
+      res.status(400).json({ error: 'invalid_payload' });
+      return;
+    }
+    const domain = db.prepare('SELECT id FROM question_domains WHERE id = ? AND tenant_id = ?').get(domainId, req.user!.tenantId);
+    if (!domain) {
+      res.status(404).json({ error: 'domain_not_found' });
+      return;
+    }
+    const existing = db
+      .prepare('SELECT id FROM external_benchmarks WHERE domain_id = ? AND peer_group_name = ?')
+      .get(domainId, peerGroupName) as { id: string } | undefined;
+    if (existing) {
+      db.prepare("UPDATE external_benchmarks SET value = ?, updated_at = datetime('now') WHERE id = ?").run(value, existing.id);
+      logAudit(db, req.user!.tenantId, req.user!.id, 'benchmark_updated', 'external_benchmark', existing.id, { domainId, peerGroupName, value });
+      res.json({ id: existing.id });
+      return;
+    }
+    const id = uid();
+    db.prepare('INSERT INTO external_benchmarks (id, tenant_id, domain_id, peer_group_name, value) VALUES (?, ?, ?, ?, ?)').run(
+      id,
+      req.user!.tenantId,
+      domainId,
+      peerGroupName,
+      value
+    );
+    logAudit(db, req.user!.tenantId, req.user!.id, 'benchmark_created', 'external_benchmark', id, { domainId, peerGroupName, value });
+    res.status(201).json({ id });
+  });
+
+  router.delete('/reports/benchmarks/:id', requireRole('SystemAdmin', 'QualityManager'), (req: Request, res: Response) => {
+    const existing = db
+      .prepare('SELECT eb.id FROM external_benchmarks eb JOIN question_domains d ON d.id = eb.domain_id WHERE eb.id = ? AND d.tenant_id = ?')
+      .get(req.params.id, req.user!.tenantId);
+    if (!existing) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    db.prepare('DELETE FROM external_benchmarks WHERE id = ?').run(req.params.id);
+    logAudit(db, req.user!.tenantId, req.user!.id, 'benchmark_deleted', 'external_benchmark', req.params.id, {});
+    res.json({ ok: true });
   });
 
   // -------------------------------------------------------------------------

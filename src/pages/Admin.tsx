@@ -41,6 +41,8 @@ interface QuestionRow {
   service_type: ServiceType;
   requires_alert: number;
   active: number;
+  is_custom: number;
+  cahps_item: number;
 }
 
 type Tab = 'departments' | 'users' | 'question-bank' | 'proms';
@@ -443,6 +445,8 @@ function QuestionBankTab() {
   const [qTextAr, setQTextAr] = useState('');
   const [qTextEn, setQTextEn] = useState('');
   const [qType, setQType] = useState<AnswerType>('likert5');
+  const [qIsCustom, setQIsCustom] = useState(true);
+  const [qCahpsItem, setQCahpsItem] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [editingDomain, setEditingDomain] = useState<Record<string, { nameAr: string; nameEn: string; benchmark: number }>>({});
@@ -515,7 +519,15 @@ function QuestionBankTab() {
     setError(null);
     if (!qCode || !qDomainId || !qTextAr || !qTextEn) return;
     try {
-      await api.post('/question-bank/questions', { code: qCode, domainId: qDomainId, textAr: qTextAr, textEn: qTextEn, type: qType });
+      await api.post('/question-bank/questions', {
+        code: qCode,
+        domainId: qDomainId,
+        textAr: qTextAr,
+        textEn: qTextEn,
+        type: qType,
+        isCustom: qIsCustom,
+        cahpsItem: qCahpsItem
+      });
       setQCode('');
       setQTextAr('');
       setQTextEn('');
@@ -527,6 +539,16 @@ function QuestionBankTab() {
 
   const toggleQuestionActive = async (q: QuestionRow) => {
     await api.patch(`/question-bank/questions/${q.id}`, { active: !q.active });
+    load();
+  };
+
+  const toggleQuestionCustom = async (q: QuestionRow) => {
+    await api.patch(`/question-bank/questions/${q.id}`, { isCustom: !q.is_custom });
+    load();
+  };
+
+  const toggleQuestionCahps = async (q: QuestionRow) => {
+    await api.patch(`/question-bank/questions/${q.id}`, { cahpsItem: !q.cahps_item });
     load();
   };
 
@@ -583,6 +605,14 @@ function QuestionBankTab() {
           </select>
           <input value={qTextAr} onChange={(e) => setQTextAr(e.target.value)} placeholder="نص السؤال بالعربية" className="rounded-lg border border-slate-300 px-3 py-2 text-sm md:col-span-2" />
           <input value={qTextEn} onChange={(e) => setQTextEn(e.target.value)} placeholder="نص السؤال بالإنجليزية" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+          <label className="flex items-center gap-2 text-xs text-slate-600">
+            <input type="checkbox" checked={qIsCustom} onChange={(e) => setQIsCustom(e.target.checked)} />
+            سؤال مخصص (†) وليس من البنك المعياري
+          </label>
+          <label className="flex items-center gap-2 text-xs text-slate-600">
+            <input type="checkbox" checked={qCahpsItem} onChange={(e) => setQCahpsItem(e.target.checked)} />
+            عنصر CAHPS (يظهر له Top Box في التقارير)
+          </label>
           <button type="button" onClick={createQuestion} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">
             إضافة سؤال
           </button>
@@ -682,7 +712,14 @@ function QuestionBankTab() {
                                 </div>
                               ) : (
                                 <span className={q.active ? 'text-slate-600' : 'text-slate-400 line-through'}>
-                                  {q.text_ar} <span className="text-slate-400">({ANSWER_TYPE_LABELS_AR[q.answer_type]})</span>
+                                  {q.text_ar}
+                                  {q.is_custom === 1 && <span title="سؤال مخصص، غير معياري">†</span>}{' '}
+                                  <span className="text-slate-400">({ANSWER_TYPE_LABELS_AR[q.answer_type]})</span>
+                                  {q.cahps_item === 1 && (
+                                    <span className="ms-1 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700">
+                                      CAHPS
+                                    </span>
+                                  )}
                                 </span>
                               )}
                               <div className="flex shrink-0 gap-2">
@@ -695,6 +732,12 @@ function QuestionBankTab() {
                                     تعديل
                                   </button>
                                 )}
+                                <button onClick={() => toggleQuestionCustom(q)} className="font-semibold text-slate-600 hover:underline">
+                                  {q.is_custom ? 'اعتباره معياريًا' : 'اعتباره مخصصًا (†)'}
+                                </button>
+                                <button onClick={() => toggleQuestionCahps(q)} className="font-semibold text-slate-600 hover:underline">
+                                  {q.cahps_item ? 'إزالة CAHPS' : 'وسمه CAHPS'}
+                                </button>
                                 <button onClick={() => toggleQuestionActive(q)} className="font-semibold text-red-600 hover:underline">
                                   {q.active ? 'إيقاف' : 'تفعيل'}
                                 </button>

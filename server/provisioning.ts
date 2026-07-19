@@ -157,8 +157,8 @@ export function provisionTenantDefaults(db: Db, root: string, tenantId: string):
   );
   const insertQuestion = db.prepare(
     `INSERT INTO questions
-     (id, tenant_id, code, domain_id, text_ar, text_en, answer_type, service_type, requires_alert, sort_order, depends_on_code)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     (id, tenant_id, code, domain_id, text_ar, text_en, answer_type, service_type, requires_alert, sort_order, depends_on_code, cahps_item)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   const insertTemplate = db.prepare(
     'INSERT INTO survey_templates (id, tenant_id, name_ar, name_en, service_type) VALUES (?, ?, ?, ?, ?)'
@@ -193,6 +193,10 @@ export function provisionTenantDefaults(db: Db, root: string, tenantId: string):
   bank.questions.forEach((question, index) => {
     const id = uid();
     questionIds[question.code] = id;
+    // The Overall Assessment domain's rating/recommend items are the CAHPS-style items whose
+    // Top Box figure is the one that matters for external reporting; other domains report a
+    // mean only, matching Press Ganey's convention of showing Top Box for CAHPS items alone.
+    const isOverallDomain = question.domain.endsWith('_OVR');
     insertQuestion.run(
       id,
       tenantId,
@@ -204,7 +208,8 @@ export function provisionTenantDefaults(db: Db, root: string, tenantId: string):
       bank.domains.find((d) => d.code === question.domain)!.service,
       question.requiresAlert ? 1 : 0,
       index,
-      null
+      null,
+      isOverallDomain ? 1 : 0
     );
   });
 
@@ -234,7 +239,7 @@ export function provisionTenantDefaults(db: Db, root: string, tenantId: string):
       const gateCode = `${service}-${ancillary.code}-GATE`;
       const gateId = uid();
       questionIds[gateCode] = gateId;
-      insertQuestion.run(gateId, tenantId, gateCode, domainId, ancillary.gate.textAr, ancillary.gate.textEn, 'yesno', service, 0, sortOrder, null);
+      insertQuestion.run(gateId, tenantId, gateCode, domainId, ancillary.gate.textAr, ancillary.gate.textEn, 'yesno', service, 0, sortOrder, null, 0);
       insertTemplateQuestion.run(uid(), id, gateId, sortOrder);
       sortOrder += 1;
 
@@ -253,7 +258,8 @@ export function provisionTenantDefaults(db: Db, root: string, tenantId: string):
           service,
           0,
           sortOrder,
-          gateCode
+          gateCode,
+          0
         );
         insertTemplateQuestion.run(uid(), id, followUpId, sortOrder);
         sortOrder += 1;

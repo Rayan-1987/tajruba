@@ -83,6 +83,20 @@ CREATE TABLE IF NOT EXISTS question_domains (
 );
 CREATE INDEX IF NOT EXISTS idx_domains_tenant ON question_domains(tenant_id);
 
+-- Admin-entered external peer-group comparison values (e.g. "All PG Database", "GCC",
+-- "National Facilities"). There is no live external benchmarking data feed, so these are
+-- manually maintained reference points shown alongside our own internal scores.
+CREATE TABLE IF NOT EXISTS external_benchmarks (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  domain_id TEXT NOT NULL REFERENCES question_domains(id) ON DELETE CASCADE,
+  peer_group_name TEXT NOT NULL,
+  value REAL NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(domain_id, peer_group_name)
+);
+CREATE INDEX IF NOT EXISTS idx_external_benchmarks_tenant ON external_benchmarks(tenant_id);
+
 CREATE TABLE IF NOT EXISTS questions (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -96,6 +110,12 @@ CREATE TABLE IF NOT EXISTS questions (
   active INTEGER NOT NULL DEFAULT 1,
   sort_order INTEGER NOT NULL DEFAULT 0,
   depends_on_code TEXT,
+  -- Non-standard/local question, shown with a dagger marker in reports (vs. a core/standardized
+  -- item comparable across facilities). Admin-created questions default to custom.
+  is_custom INTEGER NOT NULL DEFAULT 0,
+  -- Only CAHPS-style items (overall rating, likelihood to recommend, ...) show a Top Box figure
+  -- in reports; other items show mean only, matching external PREMs report conventions.
+  cahps_item INTEGER NOT NULL DEFAULT 0,
   UNIQUE(tenant_id, code)
 );
 CREATE INDEX IF NOT EXISTS idx_questions_tenant ON questions(tenant_id);
