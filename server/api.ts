@@ -1284,7 +1284,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     const includeInactive = req.query.includeInactive === '1' && req.user!.role === 'SystemAdmin';
     const domains = db
       .prepare(
-        `SELECT id, code, name_ar, name_en, service_type, benchmark_top_box_percent, active FROM question_domains
+        `SELECT id, code, name_ar, name_en, service_type, benchmark_top_box_percent, active, is_ancillary FROM question_domains
          WHERE tenant_id = ? ${includeInactive ? '' : 'AND active = 1'}`
       )
       .all(req.user!.tenantId);

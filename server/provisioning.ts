@@ -70,6 +70,10 @@ interface AncillaryServiceSeed {
   code: string;
   nameAr: string;
   nameEn: string;
+  // Which primary service lines this ancillary's gated follow-up questions make sense for —
+  // e.g. Radiology has no place on a Telehealth template, since a virtual visit has no
+  // physical imaging touchpoint. Services not listed here never get this ancillary attached.
+  applicableServices: ServiceType[];
   gate: AncillaryItemSeed;
   followUps: AncillaryItemSeed[];
 }
@@ -153,7 +157,7 @@ export function provisionTenantDefaults(db: Db, root: string, tenantId: string):
   );
 
   const insertDomain = db.prepare(
-    'INSERT INTO question_domains (id, tenant_id, code, name_ar, name_en, service_type, benchmark_top_box_percent) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO question_domains (id, tenant_id, code, name_ar, name_en, service_type, benchmark_top_box_percent, is_ancillary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   );
   const insertQuestion = db.prepare(
     `INSERT INTO questions
@@ -186,7 +190,7 @@ export function provisionTenantDefaults(db: Db, root: string, tenantId: string):
   for (const domain of bank.domains) {
     const id = uid();
     domainIds[domain.code] = id;
-    insertDomain.run(id, tenantId, domain.code, domain.nameAr, domain.nameEn, domain.service, domain.benchmark);
+    insertDomain.run(id, tenantId, domain.code, domain.nameAr, domain.nameEn, domain.service, domain.benchmark, 0);
   }
 
   const questionIds: Record<string, string> = {};
@@ -228,13 +232,14 @@ export function provisionTenantDefaults(db: Db, root: string, tenantId: string):
       sortOrder += 1;
     });
 
-    // Ancillary (Lab/Radiology/Pharmacy) gated follow-up questions, appended to every
-    // service's template — a patient in any department may have used any of these.
-    for (const ancillary of ancillaryServices) {
+    // Ancillary (Lab/Radiology/Pharmacy) gated follow-up questions — only appended where the
+    // ancillary is a plausible touchpoint for this service line (see applicableServices),
+    // not blindly to every service regardless of whether the combination makes sense.
+    for (const ancillary of ancillaryServices.filter((a) => a.applicableServices.includes(service))) {
       const domainCode = `${service}_${ancillary.code}`;
       const domainId = uid();
       domainIds[domainCode] = domainId;
-      insertDomain.run(domainId, tenantId, domainCode, ancillary.nameAr, ancillary.nameEn, service, 70.0);
+      insertDomain.run(domainId, tenantId, domainCode, ancillary.nameAr, ancillary.nameEn, service, 70.0, 1);
 
       const gateCode = `${service}-${ancillary.code}-GATE`;
       const gateId = uid();

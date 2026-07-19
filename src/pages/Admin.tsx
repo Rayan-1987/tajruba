@@ -29,6 +29,7 @@ interface Domain {
   service_type: ServiceType;
   benchmark_top_box_percent: number;
   active: number;
+  is_ancillary: number;
 }
 
 interface QuestionRow {
@@ -433,6 +434,7 @@ function QuestionBankTab() {
   const [domains, setDomains] = useState<Domain[]>([]);
   const [questions, setQuestions] = useState<QuestionRow[]>([]);
   const [expandedService, setExpandedService] = useState<ServiceType | null>(null);
+  const [ancillaryOnly, setAncillaryOnly] = useState(false);
 
   const [domainCode, setDomainCode] = useState('');
   const [domainNameAr, setDomainNameAr] = useState('');
@@ -621,9 +623,22 @@ function QuestionBankTab() {
         <p className="mt-2 text-xs text-slate-400">يُضاف السؤال تلقائيًا إلى نهاية استبيان الخدمة المرتبطة بالمحور المختار.</p>
       </div>
 
+      <div className="rounded-2xl bg-white p-4 shadow-sm">
+        <label className="flex items-center gap-2 text-sm text-slate-600">
+          <input type="checkbox" checked={ancillaryOnly} onChange={(e) => setAncillaryOnly(e.target.checked)} />
+          إظهار محاور الخدمات المساندة فقط (المختبر/الأشعة/الصيدلية) — لمراجعتها كمجموعة عبر كل الخدمات
+        </label>
+        <p className="mt-1 text-xs text-slate-400">
+          هذه المحاور تُضاف تلقائيًا عند إنشاء المستشفى فقط للخدمات التي يُرجّح أن يمر مرضاها فعليًا بهذه الخدمة المساندة أثناء
+          الزيارة نفسها؛ يمكن إيقاف أي منها هنا إن لم تنطبق على واقع منشأتكم.
+        </p>
+      </div>
+
       <div className="space-y-3">
         {services.map((service) => {
-          const serviceDomains = domains.filter((d) => d.service_type === service);
+          const serviceDomains = domains
+            .filter((d) => d.service_type === service)
+            .filter((d) => !ancillaryOnly || d.is_ancillary === 1);
           if (serviceDomains.length === 0) return null;
           return (
             <div key={service} className="rounded-2xl bg-white p-4 shadow-sm">
@@ -669,6 +684,11 @@ function QuestionBankTab() {
                         ) : (
                           <span className={`text-sm font-semibold ${d.active ? 'text-slate-700' : 'text-slate-400 line-through'}`}>
                             {d.name_ar} <span className="text-xs font-normal text-slate-400">({d.code}, معيار {d.benchmark_top_box_percent}%)</span>
+                            {d.is_ancillary === 1 && (
+                              <span className="ms-1 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700">
+                                خدمة مساندة
+                              </span>
+                            )}
                           </span>
                         )}
                         <div className="flex shrink-0 gap-2">

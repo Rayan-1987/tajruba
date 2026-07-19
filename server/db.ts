@@ -98,6 +98,11 @@ CREATE TABLE IF NOT EXISTS question_domains (
   service_type TEXT NOT NULL,
   benchmark_top_box_percent REAL NOT NULL DEFAULT 75.0,
   active INTEGER NOT NULL DEFAULT 1,
+  -- True for the Lab/Radiology/Pharmacy gated-follow-up domains auto-attached during
+  -- provisioning (see AncillaryServiceSeed.applicableServices in provisioning.ts), so the
+  -- admin question-bank UI can show/filter them as a group instead of treating every domain
+  -- the same.
+  is_ancillary INTEGER NOT NULL DEFAULT 0,
   UNIQUE(tenant_id, code)
 );
 CREATE INDEX IF NOT EXISTS idx_domains_tenant ON question_domains(tenant_id);
