@@ -46,6 +46,7 @@ import { composeEmployeeSurveyEmail, composeInvitationEmail, composePasswordRese
 import { decryptPii, encryptPii } from './crypto.ts';
 import { sendCsv, sendXlsx, type ExportCell } from './export.ts';
 import { defaultBackupDir, listBackups, runBackup } from './backup.ts';
+import { buildAuthorizationUrl, discoverOidcConfig, exchangeCodeForTokens, generatePkcePair, verifyIdToken } from './sso.ts';
 import { buildEnrollmentQrCode, consumeRecoveryCode, createMfaSecret, generateRecoveryCodes, verifyMfaToken } from './mfa.ts';
 import { AGE_BANDS, type AgeBand, type AnswerType, type RecoveryStatus, type Role, type ServiceType } from './types.ts';
 
@@ -110,6 +111,11 @@ interface TenantIntegrationsRow {
   default_language: string;
   his_webhook_key_hash: string | null;
   his_webhook_enabled: number;
+  sso_enabled: number;
+  sso_issuer_url: string | null;
+  sso_client_id: string | null;
+  sso_client_secret_encrypted: string | null;
+  sso_auto_provision_role: string;
 }
 
 function getOrCreateIntegrationsRow(db: Db, tenantId: string): TenantIntegrationsRow {
@@ -799,6 +805,117 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     setSessionCookie(res, token, expiresAt);
     logAudit(db, null, user.id, 'login', 'session', null, null);
     res.json({ ok: true, mfaRequired: false });
+  });
+
+  // -------------------------------------------------------------------------
+  // Single sign-on (RFP INT-04) — generic OIDC authorization-code + PKCE flow, alongside
+  // (not replacing) the password + TOTP login above. A tenant opts in via /settings/sso.
+  // -------------------------------------------------------------------------
+  const SSO_STATE_TTL_MS = 10 * 60 * 1000;
+
+  router.get('/auth/sso/login', loginLimiter, async (req: Request, res: Response) => {
+    const tenantSlug = req.query.tenantSlug as string | undefined;
+    if (!tenantSlug) {
+      res.status(400).json({ error: 'tenant_slug_required' });
+      return;
+    }
+    const tenant = db.prepare('SELECT id FROM tenants WHERE slug = ?').get(tenantSlug) as { id: string } | undefined;
+    if (!tenant) {
+      res.status(404).json({ error: 'tenant_not_found' });
+      return;
+    }
+    const integrations = getOrCreateIntegrationsRow(db, tenant.id);
+    if (!integrations.sso_enabled || !integrations.sso_issuer_url || !integrations.sso_client_id) {
+      res.status(404).json({ error: 'sso_not_configured' });
+      return;
+    }
+    try {
+      const config = await discoverOidcConfig(integrations.sso_issuer_url);
+      const { codeVerifier, codeChallenge } = generatePkcePair();
+      const state = uid();
+      const expiresAt = new Date(Date.now() + SSO_STATE_TTL_MS).toISOString();
+      db.prepare('INSERT INTO sso_states (id, tenant_id, state_hash, code_verifier, expires_at) VALUES (?, ?, ?, ?, ?)').run(
+        uid(),
+        tenant.id,
+        sha256(state),
+        codeVerifier,
+        expiresAt
+      );
+      const baseUrl = `${req.protocol}://${req.get('host')}`;
+      const authUrl = buildAuthorizationUrl(config, {
+        clientId: integrations.sso_client_id,
+        redirectUri: `${baseUrl}/api/auth/sso/callback`,
+        state,
+        codeChallenge
+      });
+      res.redirect(authUrl);
+    } catch {
+      res.status(502).json({ error: 'sso_provider_unreachable' });
+    }
+  });
+
+  router.get('/auth/sso/callback', loginLimiter, async (req: Request, res: Response) => {
+    const { code, state } = req.query as { code?: string; state?: string };
+    if (!code || !state) {
+      res.status(400).send('رابط الدخول عبر SSO غير صالح.');
+      return;
+    }
+    const pending = db
+      .prepare(`SELECT id, tenant_id, code_verifier FROM sso_states WHERE state_hash = ? AND datetime(expires_at) > datetime('now')`)
+      .get(sha256(state)) as { id: string; tenant_id: string; code_verifier: string } | undefined;
+    if (!pending) {
+      res.status(400).send('انتهت صلاحية جلسة تسجيل الدخول عبر SSO، حاول مرة أخرى.');
+      return;
+    }
+    db.prepare('DELETE FROM sso_states WHERE id = ?').run(pending.id);
+
+    const integrations = getOrCreateIntegrationsRow(db, pending.tenant_id);
+    const clientSecret = decryptPii(integrations.sso_client_secret_encrypted);
+    if (!integrations.sso_enabled || !integrations.sso_issuer_url || !integrations.sso_client_id || !clientSecret) {
+      res.status(409).send('تم إيقاف الدخول عبر SSO لهذه الجهة.');
+      return;
+    }
+
+    try {
+      const config = await discoverOidcConfig(integrations.sso_issuer_url);
+      const baseUrl = `${req.protocol}://${req.get('host')}`;
+      const tokens = await exchangeCodeForTokens(config, {
+        clientId: integrations.sso_client_id,
+        clientSecret,
+        redirectUri: `${baseUrl}/api/auth/sso/callback`,
+        code,
+        codeVerifier: pending.code_verifier
+      });
+      const identity = await verifyIdToken(config, tokens.id_token, integrations.sso_client_id);
+      const email = identity.email.toLowerCase().trim();
+
+      let user = db.prepare('SELECT id, active FROM users WHERE tenant_id = ? AND email = ?').get(pending.tenant_id, email) as
+        | { id: string; active: number }
+        | undefined;
+      if (!user) {
+        // First SSO login for this identity — auto-provision a local account. The password
+        // hash is a random value nothing will ever match, so this account is SSO-only until an
+        // admin sets a password for it explicitly.
+        const newUserId = uid();
+        db.prepare(
+          'INSERT INTO users (id, tenant_id, email, password_hash, role, full_name) VALUES (?, ?, ?, ?, ?, ?)'
+        ).run(newUserId, pending.tenant_id, email, hashPassword(randomUUID()), integrations.sso_auto_provision_role, identity.name ?? email);
+        user = { id: newUserId, active: 1 };
+        logAudit(db, pending.tenant_id, newUserId, 'sso_user_provisioned', 'user', newUserId, { email, role: integrations.sso_auto_provision_role });
+      }
+      if (!user.active) {
+        res.status(403).send('هذا الحساب موقوف.');
+        return;
+      }
+
+      const { token, expiresAt } = createSession(db, user.id);
+      setSessionCookie(res, token, expiresAt);
+      logAudit(db, pending.tenant_id, user.id, 'sso_login', 'session', null, null);
+      res.redirect('/dashboard');
+    } catch (error) {
+      logAudit(db, pending.tenant_id, null, 'sso_login_failed', 'session', null, { message: error instanceof Error ? error.message : String(error) });
+      res.status(502).send('تعذر إتمام تسجيل الدخول عبر SSO.');
+    }
   });
 
   router.post('/auth/mfa/verify-login', loginLimiter, express.json({ limit: '8kb' }), async (req: Request, res: Response) => {
@@ -3874,6 +3991,75 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       logAudit(db, req.user!.tenantId, req.user!.id, 'integrations_updated', 'tenant_integrations', null, {
         fields: Object.keys(body)
       });
+      res.json({ ok: true });
+    }
+  );
+
+  // -------------------------------------------------------------------------
+  // SSO configuration (RFP INT-04)
+  // -------------------------------------------------------------------------
+  router.get('/settings/sso', requireRole('SystemAdmin'), (req: Request, res: Response) => {
+    const row = getOrCreateIntegrationsRow(db, req.user!.tenantId);
+    const tenant = db.prepare('SELECT slug FROM tenants WHERE id = ?').get(req.user!.tenantId) as { slug: string };
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    res.json({
+      enabled: !!row.sso_enabled,
+      issuerUrl: row.sso_issuer_url,
+      clientId: row.sso_client_id,
+      clientSecretConfigured: !!row.sso_client_secret_encrypted,
+      autoProvisionRole: row.sso_auto_provision_role,
+      loginUrl: `${baseUrl}/api/auth/sso/login?tenantSlug=${encodeURIComponent(tenant.slug)}`,
+      callbackUrl: `${baseUrl}/api/auth/sso/callback`
+    });
+  });
+
+  router.patch(
+    '/settings/sso',
+    requireRole('SystemAdmin'),
+    express.json({ limit: '8kb' }),
+    (req: Request, res: Response) => {
+      const body = req.body as {
+        enabled?: boolean;
+        issuerUrl?: string;
+        clientId?: string;
+        clientSecret?: string;
+        autoProvisionRole?: Role;
+      };
+      getOrCreateIntegrationsRow(db, req.user!.tenantId);
+
+      const validRoles: Role[] = ['QualityManager', 'DepartmentManager', 'ExecutiveViewer'];
+      if (body.autoProvisionRole !== undefined && !validRoles.includes(body.autoProvisionRole)) {
+        res.status(400).json({ error: 'invalid_auto_provision_role' });
+        return;
+      }
+
+      const updates: string[] = [];
+      const params: (string | number)[] = [];
+      if (body.enabled !== undefined) {
+        updates.push('sso_enabled = ?');
+        params.push(body.enabled ? 1 : 0);
+      }
+      if (body.issuerUrl !== undefined) {
+        updates.push('sso_issuer_url = ?');
+        params.push(body.issuerUrl.trim());
+      }
+      if (body.clientId !== undefined) {
+        updates.push('sso_client_id = ?');
+        params.push(body.clientId.trim());
+      }
+      if (body.clientSecret !== undefined && body.clientSecret.trim().length > 0) {
+        updates.push('sso_client_secret_encrypted = ?');
+        params.push(encryptPii(body.clientSecret.trim()));
+      }
+      if (body.autoProvisionRole !== undefined) {
+        updates.push('sso_auto_provision_role = ?');
+        params.push(body.autoProvisionRole);
+      }
+      if (updates.length > 0) {
+        updates.push("updated_at = datetime('now')");
+        db.prepare(`UPDATE tenant_integrations SET ${updates.join(', ')} WHERE tenant_id = ?`).run(...params, req.user!.tenantId);
+      }
+      logAudit(db, req.user!.tenantId, req.user!.id, 'sso_settings_updated', 'tenant_integrations', null, { fields: Object.keys(body) });
       res.json({ ok: true });
     }
   );

@@ -30,6 +30,20 @@ CREATE TABLE IF NOT EXISTS tenant_integrations (
   default_language TEXT NOT NULL DEFAULT 'ar',
   his_webhook_key_hash TEXT,
   his_webhook_enabled INTEGER NOT NULL DEFAULT 0,
+  -- Single sign-on (RFP INT-04): a generic OpenID Connect connector, compatible with Entra ID
+  -- (Azure AD), Google Workspace, or any standard OIDC provider. sso_issuer_url is the
+  -- provider's discovery issuer (e.g. https://login.microsoftonline.com/{tenant}/v2.0); the
+  -- rest of the endpoints are resolved from its /.well-known/openid-configuration document at
+  -- login time rather than stored, so a provider-side endpoint change never needs a config edit
+  -- here. sso_client_secret_encrypted is encrypted at rest via server/crypto.ts.
+  sso_enabled INTEGER NOT NULL DEFAULT 0,
+  sso_issuer_url TEXT,
+  sso_client_id TEXT,
+  sso_client_secret_encrypted TEXT,
+  -- Role granted the first time a given SSO identity logs in (no local account existed yet).
+  -- Deliberately never SystemAdmin — that still requires a human to explicitly promote the
+  -- account after first login, so an IdP misconfiguration can't hand out full admin access.
+  sso_auto_provision_role TEXT NOT NULL DEFAULT 'ExecutiveViewer',
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -95,6 +109,20 @@ CREATE TABLE IF NOT EXISTS mfa_challenges (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_mfa_challenges_token ON mfa_challenges(token_hash);
+
+-- Short-lived state for one in-flight OIDC authorization-code + PKCE round trip (RFP INT-04).
+-- The state value itself is the OAuth "state" parameter round-tripped through the identity
+-- provider, so it doubles as CSRF protection; code_verifier is the PKCE secret paired with the
+-- code_challenge sent in the authorize request. Deleted once consumed by the callback.
+CREATE TABLE IF NOT EXISTS sso_states (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  state_hash TEXT NOT NULL UNIQUE,
+  code_verifier TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_sso_states_hash ON sso_states(state_hash);
 
 CREATE TABLE IF NOT EXISTS question_domains (
   id TEXT PRIMARY KEY,

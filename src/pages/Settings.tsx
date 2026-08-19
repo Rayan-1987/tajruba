@@ -31,6 +31,16 @@ interface BackupInfo {
   rtoTargetHours: number;
 }
 
+interface SsoSettings {
+  enabled: boolean;
+  issuerUrl: string | null;
+  clientId: string | null;
+  clientSecretConfigured: boolean;
+  autoProvisionRole: string;
+  loginUrl: string;
+  callbackUrl: string;
+}
+
 export default function Settings() {
   const [settings, setSettings] = useState<IntegrationsSettings | null>(null);
   const [smsProvider, setSmsProvider] = useState('console');
@@ -65,6 +75,48 @@ export default function Settings() {
     });
   };
   useEffect(loadDnc, []);
+
+  const [sso, setSso] = useState<SsoSettings | null>(null);
+  const [ssoIssuerUrl, setSsoIssuerUrl] = useState('');
+  const [ssoClientId, setSsoClientId] = useState('');
+  const [ssoClientSecret, setSsoClientSecret] = useState('');
+  const [ssoAutoProvisionRole, setSsoAutoProvisionRole] = useState('ExecutiveViewer');
+  const [ssoSaveResult, setSsoSaveResult] = useState<string | null>(null);
+
+  const loadSso = () => {
+    api.get<SsoSettings>('/settings/sso').then((res) => {
+      setSso(res);
+      setSsoIssuerUrl(res.issuerUrl ?? '');
+      setSsoClientId(res.clientId ?? '');
+      setSsoAutoProvisionRole(res.autoProvisionRole);
+    });
+  };
+  useEffect(loadSso, []);
+
+  const saveSso = async () => {
+    setBusy(true);
+    setSsoSaveResult(null);
+    try {
+      await api.patch('/settings/sso', {
+        issuerUrl: ssoIssuerUrl,
+        clientId: ssoClientId,
+        clientSecret: ssoClientSecret || undefined,
+        autoProvisionRole: ssoAutoProvisionRole
+      });
+      setSsoClientSecret('');
+      setSsoSaveResult('تم حفظ إعدادات SSO.');
+      loadSso();
+    } catch {
+      setSsoSaveResult('تعذر الحفظ.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleSso = async (enabled: boolean) => {
+    await api.patch('/settings/sso', { enabled });
+    loadSso();
+  };
 
   const [branding, setBranding] = useState<Branding | null>(null);
   const [brandingNotice, setBrandingNotice] = useState<string | null>(null);
@@ -328,6 +380,76 @@ export default function Settings() {
               </li>
             ))}
           </ul>
+        )}
+      </div>
+
+      <div className="rounded-2xl bg-white p-4 shadow-sm">
+        <div className="mb-1 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-slate-700">الدخول الموحد (SSO)</h3>
+          {sso && (
+            <label className="flex items-center gap-2 text-xs text-slate-600">
+              <input type="checkbox" checked={sso.enabled} onChange={(e) => toggleSso(e.target.checked)} />
+              مفعّل
+            </label>
+          )}
+        </div>
+        <p className="mb-3 text-xs text-slate-500">
+          تكامل OpenID Connect عام (Entra ID / Google Workspace / أي مزوّد هوية متوافق مع OIDC) يعمل جنبًا إلى جنب مع الدخول
+          بكلمة المرور، وليس بديلًا عنه.
+        </p>
+        {sso && (
+          <>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <input
+                value={ssoIssuerUrl}
+                onChange={(e) => setSsoIssuerUrl(e.target.value)}
+                placeholder="Issuer URL (مثال: https://login.microsoftonline.com/{tenant}/v2.0)"
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm md:col-span-2"
+              />
+              <input
+                value={ssoClientId}
+                onChange={(e) => setSsoClientId(e.target.value)}
+                placeholder="Client ID"
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              />
+              <input
+                value={ssoClientSecret}
+                onChange={(e) => setSsoClientSecret(e.target.value)}
+                type="password"
+                placeholder={sso.clientSecretConfigured ? '•••••••• (مُعدّ بالفعل، اترك فارغًا لعدم التغيير)' : 'Client Secret'}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              />
+              <select
+                value={ssoAutoProvisionRole}
+                onChange={(e) => setSsoAutoProvisionRole(e.target.value)}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm md:col-span-2"
+                title="الدور الممنوح تلقائيًا عند أول دخول بحساب SSO جديد"
+              >
+                <option value="ExecutiveViewer">مشاهد تنفيذي (الافتراضي، أدنى صلاحية)</option>
+                <option value="DepartmentManager">مدير قسم</option>
+                <option value="QualityManager">إدارة تجربة المريض</option>
+              </select>
+            </div>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={saveSso}
+              className="mt-3 rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
+            >
+              حفظ إعدادات SSO
+            </button>
+            {ssoSaveResult && <p className="mt-2 text-xs text-slate-600">{ssoSaveResult}</p>}
+            <div className="mt-3 space-y-1 border-t border-slate-100 pt-3 text-xs text-slate-500">
+              <p>
+                رابط رد النداء (Redirect URI) المطلوب تسجيله لدى مزوّد الهوية: <code className="break-all">{sso.callbackUrl}</code>
+              </p>
+              {sso.enabled && (
+                <p>
+                  رابط تسجيل الدخول عبر SSO لموظفي هذه الجهة: <code className="break-all">{sso.loginUrl}</code>
+                </p>
+              )}
+            </div>
+          </>
         )}
       </div>
 

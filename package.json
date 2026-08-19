@@ -20,6 +20,7 @@
     "exceljs": "^4.4.0",
     "express": "^4.21.1",
     "express-rate-limit": "^8.6.0",
+    "jose": "^6.2.9",
     "otplib": "^13.4.1",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",

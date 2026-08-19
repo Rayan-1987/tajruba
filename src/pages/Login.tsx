@@ -10,6 +10,8 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
   const [challengeToken, setChallengeToken] = useState<string | null>(null);
   const [mfaCode, setMfaCode] = useState('');
+  const [showSso, setShowSso] = useState(false);
+  const [ssoTenantSlug, setSsoTenantSlug] = useState('');
 
   if (user) return <Navigate to="/dashboard" replace />;
 
@@ -124,6 +126,38 @@ export default function Login() {
                 {busy ? 'جارِ الدخول...' : 'تسجيل الدخول'}
               </button>
             </form>
+
+            <div className="mt-4 border-t border-slate-100 pt-4">
+              {showSso ? (
+                <div className="space-y-2">
+                  <label className="block text-xs font-medium text-slate-600">معرّف الجهة (Tenant Slug)</label>
+                  <input
+                    value={ssoTenantSlug}
+                    onChange={(e) => setSsoTenantSlug(e.target.value)}
+                    placeholder="tajruba-demo"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none"
+                  />
+                  <a
+                    href={ssoTenantSlug.trim() ? `/api/auth/sso/login?tenantSlug=${encodeURIComponent(ssoTenantSlug.trim())}` : undefined}
+                    aria-disabled={!ssoTenantSlug.trim()}
+                    className={`block w-full rounded-lg border py-2.5 text-center text-sm font-semibold transition ${
+                      ssoTenantSlug.trim() ? 'border-slate-300 text-slate-700 hover:bg-slate-50' : 'pointer-events-none border-slate-200 text-slate-300'
+                    }`}
+                  >
+                    المتابعة إلى الدخول الموحّد (SSO)
+                  </a>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowSso(true)}
+                  className="w-full text-center text-xs font-semibold text-slate-500 hover:underline"
+                >
+                  الدخول عبر حساب الجهة الموحّد (SSO)
+                </button>
+              )}
+            </div>
+
             <div className="mt-6 rounded-lg bg-slate-50 p-3 text-xs text-slate-500">
               <p className="mb-1 font-semibold">حسابات تجريبية:</p>
               <p>admin@tajruba.sa / Tajruba123!</p>
