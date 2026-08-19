@@ -18,6 +18,11 @@ interface DncEntry {
   created_at: string;
 }
 
+interface Branding {
+  logoDataUri: string | null;
+  primaryColor: string;
+}
+
 interface BackupInfo {
   backups: { fileName: string; sizeBytes: number; createdAt: string }[];
   lastBackupAt: string | null;
@@ -60,6 +65,39 @@ export default function Settings() {
     });
   };
   useEffect(loadDnc, []);
+
+  const [branding, setBranding] = useState<Branding | null>(null);
+  const [brandingNotice, setBrandingNotice] = useState<string | null>(null);
+  const loadBranding = () => {
+    api.get<Branding>('/settings/branding').then(setBranding);
+  };
+  useEffect(loadBranding, []);
+
+  const updatePrimaryColor = async (color: string) => {
+    setBranding((prev) => (prev ? { ...prev, primaryColor: color } : prev));
+    await api.patch('/settings/branding', { primaryColor: color });
+  };
+
+  const uploadLogo = async (file: File) => {
+    if (file.size > 200 * 1024) {
+      setBrandingNotice('حجم الشعار كبير جدًا (الحد الأقصى ٢٠٠ كيلوبايت).');
+      return;
+    }
+    const dataUri = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    setBrandingNotice(null);
+    await api.patch('/settings/branding', { logoDataUri: dataUri });
+    loadBranding();
+  };
+
+  const removeLogo = async () => {
+    await api.patch('/settings/branding', { logoDataUri: null });
+    loadBranding();
+  };
 
   const [backupInfo, setBackupInfo] = useState<BackupInfo | null>(null);
   const [backupBusy, setBackupBusy] = useState(false);
@@ -291,6 +329,54 @@ export default function Settings() {
             ))}
           </ul>
         )}
+      </div>
+
+      <div className="rounded-2xl bg-white p-4 shadow-sm">
+        <h3 className="mb-1 text-sm font-semibold text-slate-700">الهوية البصرية</h3>
+        <p className="mb-3 text-xs text-slate-500">الشعار واللون الأساسي يظهران في صفحات الاستبيان الموجّهة للمرضى والموظفين.</p>
+        {branding && (
+          <div className="flex flex-wrap items-center gap-6">
+            <div className="flex items-center gap-3">
+              {branding.logoDataUri ? (
+                <img src={branding.logoDataUri} alt="الشعار الحالي" className="h-12 w-12 rounded-lg border border-slate-200 object-contain" />
+              ) : (
+                <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-dashed border-slate-300 text-[10px] text-slate-400">
+                  لا يوجد
+                </div>
+              )}
+              <div>
+                <label className="block cursor-pointer text-xs font-semibold text-emerald-600 hover:underline">
+                  رفع شعار جديد
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) uploadLogo(file);
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
+                {branding.logoDataUri && (
+                  <button type="button" onClick={removeLogo} className="mt-1 block text-xs text-red-600 hover:underline">
+                    إزالة الشعار
+                  </button>
+                )}
+              </div>
+            </div>
+            <label className="flex items-center gap-2 text-xs text-slate-600">
+              اللون الأساسي
+              <input
+                type="color"
+                value={branding.primaryColor}
+                onChange={(e) => updatePrimaryColor(e.target.value)}
+                className="h-8 w-12 cursor-pointer rounded border border-slate-200"
+              />
+            </label>
+          </div>
+        )}
+        {brandingNotice && <p className="mt-2 text-xs text-red-600">{brandingNotice}</p>}
       </div>
 
       <div className="rounded-2xl bg-white p-4 shadow-sm">

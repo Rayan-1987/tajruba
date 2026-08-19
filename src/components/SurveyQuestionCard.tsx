@@ -19,18 +19,24 @@ export function SurveyQuestionCard({
   question,
   value,
   language = 'ar',
+  accentColor,
   onSelect,
   onSelectWithClear
 }: {
   question: SurveyQuestion;
   value: number | undefined;
   language?: 'ar' | 'en';
+  /** Tenant brand color (RFP UX-05); falls back to the default emerald accent when unset. */
+  accentColor?: string;
   onSelect: (value: number) => void;
   onSelectWithClear: (value: number) => void;
 }) {
   const [yesLabel, noLabel] = YES_NO_LABELS[language];
   const headingId = `q-${question.id}`;
   const questionText = language === 'en' ? question.text_en : question.text_ar;
+  const selectedClass = (selected: boolean) =>
+    selected ? (accentColor ? 'text-white' : 'bg-emerald-500 text-white') : 'bg-slate-100 text-slate-600 hover:bg-slate-200';
+  const selectedStyle = (selected: boolean) => (selected && accentColor ? { backgroundColor: accentColor } : undefined);
   return (
     <div className="rounded-2xl bg-white p-4 shadow-sm">
       <p id={headingId} className="mb-3 font-medium text-slate-800">
@@ -43,9 +49,8 @@ export function SurveyQuestionCard({
             role="radio"
             aria-checked={value === 1}
             onClick={() => onSelect(1)}
-            className={`flex-1 rounded-xl py-3 text-sm font-semibold transition ${FOCUS_RING} ${
-              value === 1 ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-            }`}
+            style={selectedStyle(value === 1)}
+            className={`flex-1 rounded-xl py-3 text-sm font-semibold transition ${FOCUS_RING} ${selectedClass(value === 1)}`}
           >
             {yesLabel}
           </button>
@@ -54,9 +59,8 @@ export function SurveyQuestionCard({
             role="radio"
             aria-checked={value === 0}
             onClick={() => onSelectWithClear(0)}
-            className={`flex-1 rounded-xl py-3 text-sm font-semibold transition ${FOCUS_RING} ${
-              value === 0 ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-            }`}
+            style={selectedStyle(value === 0)}
+            className={`flex-1 rounded-xl py-3 text-sm font-semibold transition ${FOCUS_RING} ${selectedClass(value === 0)}`}
           >
             {noLabel}
           </button>
@@ -72,9 +76,8 @@ export function SurveyQuestionCard({
               aria-checked={value === v}
               aria-label={LIKERT_LABELS[language][v - 1]}
               onClick={() => onSelect(v)}
-              className={`flex-1 rounded-xl py-3 text-sm font-semibold transition ${FOCUS_RING} ${
-                value === v ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}
+              style={selectedStyle(value === v)}
+              className={`flex-1 rounded-xl py-3 text-sm font-semibold transition ${FOCUS_RING} ${selectedClass(value === v)}`}
               title={LIKERT_LABELS[language][v - 1]}
             >
               {v}
@@ -92,9 +95,8 @@ export function SurveyQuestionCard({
               aria-checked={value === v}
               aria-label={language === 'en' ? `${v} out of 10` : `${v} من 10`}
               onClick={() => onSelect(v)}
-              className={`rounded-lg py-2 text-xs font-semibold transition ${FOCUS_RING} ${
-                value === v ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}
+              style={selectedStyle(value === v)}
+              className={`rounded-lg py-2 text-xs font-semibold transition ${FOCUS_RING} ${selectedClass(value === v)}`}
             >
               {v}
             </button>

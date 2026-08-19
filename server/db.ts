@@ -12,6 +12,13 @@ CREATE TABLE IF NOT EXISTS tenants (
   name_ar TEXT NOT NULL,
   name_en TEXT NOT NULL,
   slug TEXT NOT NULL UNIQUE,
+  -- Patient/employee-facing branding (RFP UX-05: "استخدام الهوية البصرية للجهة في جميع
+  -- الواجهات"). logo_data_uri holds the logo inline as a data: URI (validated/size-capped in
+  -- the API layer) rather than a separate file store, since one small image per tenant doesn't
+  -- warrant object storage. brand_primary_color is a hex color applied to the accent elements
+  -- (progress bar, submit button, selected answer) on the public survey pages.
+  logo_data_uri TEXT,
+  brand_primary_color TEXT NOT NULL DEFAULT '#059669',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

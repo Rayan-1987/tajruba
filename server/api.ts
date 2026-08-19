@@ -131,6 +131,18 @@ function getTenantSmsConfig(db: Db, tenantId: string): TenantSmsConfig {
   };
 }
 
+interface TenantBranding {
+  logoDataUri: string | null;
+  primaryColor: string;
+}
+
+function getTenantBranding(db: Db, tenantId: string): TenantBranding {
+  const row = db.prepare('SELECT logo_data_uri, brand_primary_color FROM tenants WHERE id = ?').get(tenantId) as
+    | { logo_data_uri: string | null; brand_primary_color: string }
+    | undefined;
+  return { logoDataUri: row?.logo_data_uri ?? null, primaryColor: row?.brand_primary_color ?? '#059669' };
+}
+
 function maskSecret(value: string | null): string | null {
   if (!value) return null;
   if (value.length <= 4) return '••••';
@@ -421,6 +433,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       templateNameEn: template.name_en,
       serviceType: invitation.service_type,
       defaultLanguage: getTenantSmsConfig(db, invitation.tenant_id).defaultLanguage,
+      branding: getTenantBranding(db, invitation.tenant_id),
       questions
     });
   });
@@ -553,6 +566,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       templateNameEn: template.name_en,
       serviceType: template.service_type,
       defaultLanguage: getTenantSmsConfig(db, kiosk.tenant_id).defaultLanguage,
+      branding: getTenantBranding(db, kiosk.tenant_id),
       questions
     });
   });
@@ -1266,6 +1280,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       instrumentNameAr: invitation.instrument_name_ar,
       instrumentNameEn: invitation.instrument_name_en,
       defaultLanguage: getTenantSmsConfig(db, invitation.tenant_id).defaultLanguage,
+      branding: getTenantBranding(db, invitation.tenant_id),
       domains: domains.map((d) => ({
         id: d.id,
         nameAr: d.name_ar,
@@ -3505,6 +3520,46 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
   // -------------------------------------------------------------------------
   // Settings: integrations (SMS/WhatsApp provider + HIS webhook)
   // -------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // Branding (RFP UX-05) — logo and accent color shown on the patient/employee-facing survey
+  // pages. Read here for the admin editor; the public survey endpoints call getTenantBranding
+  // directly so an anonymous respondent never needs to authenticate to see it.
+  // -------------------------------------------------------------------------
+  const MAX_LOGO_DATA_URI_LENGTH = 300_000; // ~220KB decoded, generous for a small logo image
+  const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+  router.get('/settings/branding', requireRole('SystemAdmin'), (req: Request, res: Response) => {
+    res.json(getTenantBranding(db, req.user!.tenantId));
+  });
+
+  router.patch(
+    '/settings/branding',
+    requireRole('SystemAdmin'),
+    express.json({ limit: '400kb' }),
+    (req: Request, res: Response) => {
+      const { logoDataUri, primaryColor } = req.body as { logoDataUri?: string | null; primaryColor?: string };
+      if (logoDataUri !== undefined) {
+        if (logoDataUri !== null && (!logoDataUri.startsWith('data:image/') || logoDataUri.length > MAX_LOGO_DATA_URI_LENGTH)) {
+          res.status(400).json({ error: 'invalid_logo' });
+          return;
+        }
+        db.prepare('UPDATE tenants SET logo_data_uri = ? WHERE id = ?').run(logoDataUri, req.user!.tenantId);
+      }
+      if (primaryColor !== undefined) {
+        if (!HEX_COLOR_RE.test(primaryColor)) {
+          res.status(400).json({ error: 'invalid_color' });
+          return;
+        }
+        db.prepare('UPDATE tenants SET brand_primary_color = ? WHERE id = ?').run(primaryColor, req.user!.tenantId);
+      }
+      logAudit(db, req.user!.tenantId, req.user!.id, 'branding_updated', 'tenant', req.user!.tenantId, {
+        logoChanged: logoDataUri !== undefined,
+        primaryColor
+      });
+      res.json(getTenantBranding(db, req.user!.tenantId));
+    }
+  );
+
   router.get('/settings/integrations', requireRole('SystemAdmin'), (req: Request, res: Response) => {
     const row = getOrCreateIntegrationsRow(db, req.user!.tenantId);
     const baseUrl = `${req.protocol}://${req.get('host')}`;

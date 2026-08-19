@@ -31,10 +31,16 @@ interface EmployeeSurveyDomain {
   questions: { id: string; textAr: string; textEn: string; answerType: SurveyQuestion['answer_type'] }[];
 }
 
+interface Branding {
+  logoDataUri: string | null;
+  primaryColor: string;
+}
+
 interface EmployeeSurveyPayload {
   instrumentNameAr: string;
   instrumentNameEn: string;
   defaultLanguage: 'ar' | 'en';
+  branding?: Branding;
   domains: EmployeeSurveyDomain[];
 }
 
@@ -118,13 +124,20 @@ export default function EmployeeSurvey() {
     }
   };
 
+  const accentColor = survey.branding?.primaryColor;
+
   return (
     <div className="min-h-screen bg-slate-100 pb-24" dir={language === 'en' ? 'ltr' : 'rtl'} lang={language}>
       <header className="bg-white px-5 py-4 shadow-sm">
         <div className="flex items-start justify-between gap-3">
-          <div>
-            <h1 className="text-lg font-bold text-slate-800">{language === 'en' ? survey.instrumentNameEn : survey.instrumentNameAr}</h1>
-            <p className="text-sm text-slate-500">{t.subtitle}</p>
+          <div className="flex items-center gap-3">
+            {survey.branding?.logoDataUri && (
+              <img src={survey.branding.logoDataUri} alt="" className="h-10 w-10 shrink-0 rounded-lg object-contain" />
+            )}
+            <div>
+              <h1 className="text-lg font-bold text-slate-800">{language === 'en' ? survey.instrumentNameEn : survey.instrumentNameAr}</h1>
+              <p className="text-sm text-slate-500">{t.subtitle}</p>
+            </div>
           </div>
           <button
             type="button"
@@ -143,8 +156,8 @@ export default function EmployeeSurvey() {
           aria-label={language === 'en' ? 'Survey progress' : 'تقدم تعبئة الاستبانة'}
         >
           <div
-            className="h-full rounded-full bg-emerald-500 transition-all"
-            style={{ width: `${Math.min(100, (answeredCount / Math.max(1, requiredQuestions.length)) * 100)}%` }}
+            className={`h-full rounded-full transition-all ${accentColor ? '' : 'bg-emerald-500'}`}
+            style={{ width: `${Math.min(100, (answeredCount / Math.max(1, requiredQuestions.length)) * 100)}%`, backgroundColor: accentColor }}
           />
         </div>
       </header>
@@ -177,6 +190,7 @@ export default function EmployeeSurvey() {
                     question={{ id: q.id, code: q.id, text_ar: q.textAr, text_en: q.textEn, answer_type: q.answerType, depends_on_code: null }}
                     value={answers[q.id]}
                     language={language}
+                    accentColor={accentColor}
                     onSelect={(value) => setAnswers((prev) => ({ ...prev, [q.id]: value }))}
                     onSelectWithClear={(value) => setAnswers((prev) => ({ ...prev, [q.id]: value }))}
                   />
@@ -192,7 +206,8 @@ export default function EmployeeSurvey() {
           type="button"
           disabled={submitting || answeredCount < requiredQuestions.length}
           onClick={submit}
-          className="mx-auto block w-full max-w-xl rounded-xl bg-emerald-600 py-3 text-center font-semibold text-white transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+          style={!submitting && answeredCount >= requiredQuestions.length ? { backgroundColor: accentColor } : undefined}
+          className={`mx-auto block w-full max-w-xl rounded-xl py-3 text-center font-semibold text-white transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300 ${accentColor ? '' : 'bg-emerald-600'}`}
         >
           {submitting ? t.submitting : t.submit}
         </button>
