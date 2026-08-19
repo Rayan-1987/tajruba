@@ -18,6 +18,14 @@ interface DncEntry {
   created_at: string;
 }
 
+interface BackupInfo {
+  backups: { fileName: string; sizeBytes: number; createdAt: string }[];
+  lastBackupAt: string | null;
+  retentionDays: number;
+  rpoTargetHours: number;
+  rtoTargetHours: number;
+}
+
 export default function Settings() {
   const [settings, setSettings] = useState<IntegrationsSettings | null>(null);
   const [smsProvider, setSmsProvider] = useState('console');
@@ -52,6 +60,23 @@ export default function Settings() {
     });
   };
   useEffect(loadDnc, []);
+
+  const [backupInfo, setBackupInfo] = useState<BackupInfo | null>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const loadBackups = () => {
+    api.get<BackupInfo>('/settings/backups').then(setBackupInfo);
+  };
+  useEffect(loadBackups, []);
+
+  const runBackupNow = async () => {
+    setBackupBusy(true);
+    try {
+      await api.post('/settings/backups/run');
+      loadBackups();
+    } finally {
+      setBackupBusy(false);
+    }
+  };
 
   const addDncEntry = async () => {
     if (!dncPhone) return;
@@ -265,6 +290,42 @@ export default function Settings() {
               </li>
             ))}
           </ul>
+        )}
+      </div>
+
+      <div className="rounded-2xl bg-white p-4 shadow-sm">
+        <div className="mb-1 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-slate-700">النسخ الاحتياطي</h3>
+          <button
+            type="button"
+            disabled={backupBusy}
+            onClick={runBackupNow}
+            className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {backupBusy ? 'جارِ التنفيذ...' : 'تنفيذ نسخة احتياطية الآن'}
+          </button>
+        </div>
+        {backupInfo && (
+          <>
+            <p className="mb-3 text-xs text-slate-500">
+              نسخة احتياطية تلقائية يوميًا · هدف نقطة الاسترجاع (RPO) {backupInfo.rpoTargetHours} ساعات · هدف زمن الاسترجاع (RTO)
+              {' '}
+              {backupInfo.rtoTargetHours} ساعات · الاحتفاظ {backupInfo.retentionDays} يومًا
+            </p>
+            <p className="mb-3 text-xs text-slate-600">
+              آخر نسخة: {backupInfo.lastBackupAt ? new Date(backupInfo.lastBackupAt).toLocaleString('ar-SA') : 'لا توجد نسخ بعد'}
+            </p>
+            {backupInfo.backups.length > 0 && (
+              <ul className="divide-y divide-slate-100 text-xs">
+                {backupInfo.backups.slice(0, 10).map((b) => (
+                  <li key={b.fileName} className="flex items-center justify-between py-1.5">
+                    <span className="text-slate-600">{new Date(b.createdAt).toLocaleString('ar-SA')}</span>
+                    <span className="text-slate-400">{(b.sizeBytes / 1024 / 1024).toFixed(2)} MB</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
         )}
       </div>
     </div>

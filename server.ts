@@ -6,6 +6,7 @@ import { createServer as createViteServer } from 'vite';
 import { openDatabase } from './server/db.ts';
 import { seedDatabase } from './server/seed.ts';
 import { createApi, autoSendDuePromsAssignments } from './server/api.ts';
+import { defaultBackupDir, pruneOldBackups, runBackup } from './server/backup.ts';
 
 dotenv.config();
 
@@ -88,9 +89,27 @@ async function start() {
   runAutoSend();
   const autoSendTimer = setInterval(runAutoSend, PROMS_AUTO_SEND_INTERVAL_MS);
 
+  // Daily automated backup (RPO/RTO target, RFP INF-05). Runs once at startup so a fresh
+  // deployment always has a same-day snapshot, then on a configurable interval (default 24h).
+  const backupDir = defaultBackupDir(root);
+  const BACKUP_RETENTION_DAYS = Number(process.env.BACKUP_RETENTION_DAYS ?? 14);
+  const BACKUP_INTERVAL_MS = Number(process.env.BACKUP_INTERVAL_HOURS ?? 24) * 60 * 60 * 1000;
+  const runScheduledBackup = () => {
+    const result = runBackup(db, backupDir);
+    if (result.ok) {
+      const removed = pruneOldBackups(backupDir, BACKUP_RETENTION_DAYS);
+      console.log(`Backup complete: ${result.fileName} (${result.sizeBytes} bytes)${removed ? `, pruned ${removed} old backup(s)` : ''}`);
+    } else {
+      console.error(`Backup failed: ${result.error}`);
+    }
+  };
+  runScheduledBackup();
+  const backupTimer = setInterval(runScheduledBackup, BACKUP_INTERVAL_MS);
+
   const shutdown = () =>
     server.close(() => {
       clearInterval(autoSendTimer);
+      clearInterval(backupTimer);
       db.close();
       process.exit(0);
     });

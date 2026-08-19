@@ -45,6 +45,7 @@ import {
 import { composeEmployeeSurveyEmail, composeInvitationEmail, composePasswordResetEmail, createEmailProvider } from './email.ts';
 import { decryptPii, encryptPii } from './crypto.ts';
 import { sendCsv, sendXlsx, type ExportCell } from './export.ts';
+import { defaultBackupDir, listBackups, runBackup } from './backup.ts';
 import { buildEnrollmentQrCode, consumeRecoveryCode, createMfaSecret, generateRecoveryCodes, verifyMfaToken } from './mfa.ts';
 import type { AnswerType, RecoveryStatus, Role, ServiceType } from './types.ts';
 
@@ -3586,6 +3587,33 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       res.json({ ok: result.ok, provider: provider.name, error: result.error });
     }
   );
+
+  // -------------------------------------------------------------------------
+  // Backups (RFP INF-05) — visibility into the automated daily backup scheduled in server.ts,
+  // plus an on-demand trigger for right before a risky change.
+  // -------------------------------------------------------------------------
+  router.get('/settings/backups', requireRole('SystemAdmin'), (_req: Request, res: Response) => {
+    const backupDir = defaultBackupDir(root);
+    const backups = listBackups(backupDir);
+    res.json({
+      backups,
+      lastBackupAt: backups[0]?.createdAt ?? null,
+      retentionDays: Number(process.env.BACKUP_RETENTION_DAYS ?? 14),
+      rpoTargetHours: 4,
+      rtoTargetHours: 8
+    });
+  });
+
+  router.post('/settings/backups/run', requireRole('SystemAdmin'), (req: Request, res: Response) => {
+    const backupDir = defaultBackupDir(root);
+    const result = runBackup(db, backupDir);
+    if (!result.ok) {
+      res.status(500).json({ error: 'backup_failed', detail: result.error });
+      return;
+    }
+    logAudit(db, req.user!.tenantId, req.user!.id, 'backup_run_manually', 'backup', null, { fileName: result.fileName });
+    res.status(201).json(result);
+  });
 
   router.post('/settings/integrations/webhook-key/regenerate', requireRole('SystemAdmin'), (req: Request, res: Response) => {
     getOrCreateIntegrationsRow(db, req.user!.tenantId);
