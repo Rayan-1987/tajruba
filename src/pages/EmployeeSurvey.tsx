@@ -119,7 +119,7 @@ export default function EmployeeSurvey() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 pb-24" dir={language === 'en' ? 'ltr' : 'rtl'}>
+    <div className="min-h-screen bg-slate-100 pb-24" dir={language === 'en' ? 'ltr' : 'rtl'} lang={language}>
       <header className="bg-white px-5 py-4 shadow-sm">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -129,12 +129,19 @@ export default function EmployeeSurvey() {
           <button
             type="button"
             onClick={() => setLanguage((l) => (l === 'ar' ? 'en' : 'ar'))}
-            className="shrink-0 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+            className="shrink-0 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600"
           >
             {t.langToggle}
           </button>
         </div>
-        <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-200">
+        <div
+          className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-200"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={requiredQuestions.length}
+          aria-valuenow={answeredCount}
+          aria-label={language === 'en' ? 'Survey progress' : 'تقدم تعبئة الاستبانة'}
+        >
           <div
             className="h-full rounded-full bg-emerald-500 transition-all"
             style={{ width: `${Math.min(100, (answeredCount / Math.max(1, requiredQuestions.length)) * 100)}%` }}
@@ -144,18 +151,23 @@ export default function EmployeeSurvey() {
 
       <main className="mx-auto max-w-xl space-y-6 px-4 py-5">
         {survey.domains.map((domain) => (
-          <section key={domain.id}>
-            <h2 className="mb-2 px-1 text-sm font-semibold text-slate-500">{language === 'en' ? domain.nameEn : domain.nameAr}</h2>
+          <section key={domain.id} aria-labelledby={`domain-${domain.id}`}>
+            <h2 id={`domain-${domain.id}`} className="mb-2 px-1 text-sm font-semibold text-slate-500">
+              {language === 'en' ? domain.nameEn : domain.nameAr}
+            </h2>
             <div className="space-y-3">
               {domain.questions.map((q) =>
                 q.answerType === 'text' ? (
                   <div key={q.id} className="rounded-2xl bg-white p-4 shadow-sm">
-                    <p className="mb-2 font-medium text-slate-800">{language === 'en' ? q.textEn : q.textAr}</p>
+                    <label htmlFor={`text-${q.id}`} className="mb-2 block font-medium text-slate-800">
+                      {language === 'en' ? q.textEn : q.textAr}
+                    </label>
                     <textarea
+                      id={`text-${q.id}`}
                       value={textAnswers[q.id] ?? ''}
                       onChange={(e) => setTextAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))}
                       rows={3}
-                      className="w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-emerald-400 focus:outline-none"
+                      className="w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-emerald-400 focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-600"
                       placeholder={language === 'en' ? 'Optional' : 'اختياري'}
                     />
                   </div>
@@ -180,7 +192,7 @@ export default function EmployeeSurvey() {
           type="button"
           disabled={submitting || answeredCount < requiredQuestions.length}
           onClick={submit}
-          className="mx-auto block w-full max-w-xl rounded-xl bg-emerald-600 py-3 text-center font-semibold text-white transition disabled:cursor-not-allowed disabled:bg-slate-300"
+          className="mx-auto block w-full max-w-xl rounded-xl bg-emerald-600 py-3 text-center font-semibold text-white transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300"
         >
           {submitting ? t.submitting : t.submit}
         </button>

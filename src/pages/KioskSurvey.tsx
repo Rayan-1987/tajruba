@@ -152,7 +152,7 @@ export default function KioskSurvey() {
   const t = STRINGS[language];
 
   return (
-    <div className="min-h-screen bg-slate-100 pb-24" dir={language === 'en' ? 'ltr' : 'rtl'}>
+    <div className="min-h-screen bg-slate-100 pb-24" dir={language === 'en' ? 'ltr' : 'rtl'} lang={language}>
       <header className="bg-white px-5 py-4 shadow-sm">
         <div className="flex items-start justify-between gap-3">
           <div>
