@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../AuthContext';
 import { CATEGORY_LABELS_AR, STATUS_LABELS_AR } from '../types';
+import type { Department } from '../types';
 
 interface RecoveryCase {
   id: string;
@@ -19,6 +20,10 @@ interface RecoveryCase {
   category: string;
   patient_contact_opt_in: number;
   patient_notified_at: string | null;
+  escalation_level: number;
+  improvement_plan_id: string | null;
+  improvement_plan_title: string | null;
+  improvement_plan_status: string | null;
 }
 
 interface AssignableUser {
@@ -26,6 +31,21 @@ interface AssignableUser {
   full_name: string;
   role: string;
 }
+
+interface ImprovementPlan {
+  id: string;
+  title: string;
+  corrective_action: string | null;
+  status: string;
+  due_date: string | null;
+  effectiveness_notes: string | null;
+  department_id: string | null;
+  department_name_ar: string | null;
+  owner_name: string | null;
+  created_at: string;
+}
+
+const ESCALATION_LABELS_AR: Record<number, string> = { 1: 'تصعيد: مدير الجودة', 2: 'تصعيد: الإدارة التنفيذية' };
 
 const COLUMNS: RecoveryCase['status'][] = ['new', 'assigned', 'in_progress', 'closed'];
 const NEXT_STATUS: Record<string, RecoveryCase['status']> = { new: 'assigned', assigned: 'in_progress', in_progress: 'closed' };
@@ -36,6 +56,37 @@ export default function ServiceRecovery() {
   const [notesDraft, setNotesDraft] = useState<Record<string, string>>({});
   const [assignableByDept, setAssignableByDept] = useState<Record<string, AssignableUser[]>>({});
   const [dueDraft, setDueDraft] = useState<Record<string, string>>({});
+  const [plans, setPlans] = useState<ImprovementPlan[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [newPlanTitle, setNewPlanTitle] = useState('');
+  const [newPlanDept, setNewPlanDept] = useState('');
+
+  const loadPlans = () => {
+    api.get<{ plans: ImprovementPlan[] }>('/service-recovery/improvement-plans').then((res) => setPlans(res.plans));
+  };
+  useEffect(loadPlans, []);
+  useEffect(() => {
+    api.get<{ departments: Department[] }>('/departments').then((res) => setDepartments(res.departments));
+  }, []);
+
+  const createPlan = async () => {
+    if (!newPlanTitle.trim()) return;
+    await api.post('/service-recovery/improvement-plans', { title: newPlanTitle.trim(), departmentId: newPlanDept || undefined });
+    setNewPlanTitle('');
+    setNewPlanDept('');
+    loadPlans();
+  };
+
+  const updatePlanStatus = async (planId: string, status: string) => {
+    await api.patch(`/service-recovery/improvement-plans/${planId}`, { status });
+    loadPlans();
+    load();
+  };
+
+  const linkPlan = async (c: RecoveryCase, planId: string) => {
+    await api.patch(`/service-recovery/cases/${c.id}/link-plan`, { improvementPlanId: planId || null });
+    load();
+  };
 
   const load = () => {
     api.get<{ cases: RecoveryCase[] }>('/service-recovery/cases').then((res) => {
@@ -103,6 +154,11 @@ export default function ServiceRecovery() {
                       {status !== 'closed' && c.due_at && new Date(c.due_at) < new Date() && (
                         <span className="rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-semibold text-white">متأخرة عن الموعد</span>
                       )}
+                      {c.escalation_level > 0 && (
+                        <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-semibold text-orange-700">
+                          {ESCALATION_LABELS_AR[c.escalation_level] ?? `مستوى تصعيد ${c.escalation_level}`}
+                        </span>
+                      )}
                     </div>
                     <p className="mb-2 text-xs text-slate-700">{c.redacted_text}</p>
                     {c.resolution_notes && <p className="mb-2 text-[11px] text-slate-500">{c.resolution_notes}</p>}
@@ -130,6 +186,21 @@ export default function ServiceRecovery() {
                       </div>
                     )}
                     {c.assigned_to_name && <p className="mb-2 text-[11px] text-slate-500">المسؤول: {c.assigned_to_name}</p>}
+                    <select
+                      value={c.improvement_plan_id ?? ''}
+                      onChange={(e) => linkPlan(c, e.target.value)}
+                      className="mb-2 w-full rounded-lg border border-slate-200 p-1 text-[11px] text-slate-600"
+                      title="ربط بخطة تحسين (RFP SRC-06)"
+                    >
+                      <option value="">بدون خطة تحسين مرتبطة</option>
+                      {plans
+                        .filter((p) => !p.department_id || p.department_id === c.department_id)
+                        .map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.title}
+                          </option>
+                        ))}
+                    </select>
                     {status !== 'closed' && (
                       <>
                         {status !== 'new' && (
@@ -155,6 +226,60 @@ export default function ServiceRecovery() {
             </div>
           </div>
         ))}
+      </div>
+
+      <div className="rounded-2xl bg-white p-4 shadow-sm">
+        <h3 className="mb-1 text-sm font-semibold text-slate-700">خطط التحسين (إجراءات تصحيحية ووقائية)</h3>
+        <p className="mb-3 text-xs text-slate-500">اربط أي بلاغ بخطة تحسين لمعالجة السبب الجذري بدلاً من إغلاق كل بلاغ منفردًا، وتابع فاعليتها لاحقًا.</p>
+        <div className="mb-3 flex flex-wrap gap-2">
+          <input
+            value={newPlanTitle}
+            onChange={(e) => setNewPlanTitle(e.target.value)}
+            placeholder="عنوان خطة التحسين"
+            className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          />
+          <select
+            value={newPlanDept}
+            onChange={(e) => setNewPlanDept(e.target.value)}
+            disabled={user?.role === 'DepartmentManager'}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100"
+          >
+            <option value="">كل الأقسام</option>
+            {departments.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name_ar}
+              </option>
+            ))}
+          </select>
+          <button type="button" onClick={createPlan} className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700">
+            إضافة خطة
+          </button>
+        </div>
+        {plans.length === 0 ? (
+          <p className="text-xs text-slate-400">لا توجد خطط تحسين بعد.</p>
+        ) : (
+          <div className="space-y-2">
+            {plans.map((p) => (
+              <div key={p.id} className="flex items-center justify-between rounded-xl border border-slate-100 p-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-700">{p.title}</p>
+                  <p className="text-xs text-slate-400">
+                    {p.department_name_ar ?? 'كل الأقسام'} {p.owner_name ? `· ${p.owner_name}` : ''}
+                  </p>
+                </div>
+                <select
+                  value={p.status}
+                  onChange={(e) => updatePlanStatus(p.id, e.target.value)}
+                  className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                >
+                  <option value="open">مفتوحة</option>
+                  <option value="in_progress">قيد التنفيذ</option>
+                  <option value="done">منجزة</option>
+                </select>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

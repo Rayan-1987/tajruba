@@ -317,6 +317,47 @@ export async function autoSendDuePromsAssignments(
   return { sent, failed, skipped, reminded, expired };
 }
 
+// Multi-level SLA escalation for service recovery cases (RFP SRC-03): level 1 fires the moment a
+// case's due_at passes with no closure, level 2 (executive management) fires after another 24
+// overdue hours. Reuses the existing comment_alerts notification mechanism (rather than a new
+// notification channel) so an escalation surfaces through the same badge/list UI a fresh negative
+// comment does, with severity bumped so it stands out. Intended to be called on an interval from
+// server.ts, same pattern as autoSendDuePromsAssignments above.
+const ESCALATION_LEVELS: { afterHoursOverdue: number; toRole: string }[] = [
+  { afterHoursOverdue: 0, toRole: 'QualityManager' },
+  { afterHoursOverdue: 24, toRole: 'SystemAdmin' }
+];
+
+export function escalateOverdueCases(db: Db): { escalated: number } {
+  const now = Date.now();
+  const openCases = db
+    .prepare(
+      `SELECT id, tenant_id, comment_id, due_at, escalation_level FROM service_recovery_cases
+       WHERE status != 'closed' AND due_at IS NOT NULL AND escalation_level < ?`
+    )
+    .all(ESCALATION_LEVELS.length) as { id: string; tenant_id: string; comment_id: string; due_at: string; escalation_level: number }[];
+
+  let escalated = 0;
+  const updateLevel = db.prepare('UPDATE service_recovery_cases SET escalation_level = ? WHERE id = ?');
+  const insertEscalation = db.prepare(
+    'INSERT INTO case_escalations (id, case_id, tenant_id, level, escalated_to_role) VALUES (?, ?, ?, ?, ?)'
+  );
+  const insertAlert = db.prepare('INSERT INTO comment_alerts (id, comment_id, tenant_id, severity) VALUES (?, ?, ?, ?)');
+
+  for (const c of openCases) {
+    const overdueHours = (now - new Date(c.due_at).getTime()) / (60 * 60 * 1000);
+    if (overdueHours < 0) continue;
+    const levelDef = ESCALATION_LEVELS[c.escalation_level];
+    if (overdueHours < levelDef.afterHoursOverdue) continue;
+    const nextLevel = c.escalation_level + 1;
+    updateLevel.run(nextLevel, c.id);
+    insertEscalation.run(randomUUID(), c.id, c.tenant_id, nextLevel, levelDef.toRole);
+    insertAlert.run(randomUUID(), c.comment_id, c.tenant_id, Math.min(5, 3 + nextLevel));
+    escalated += 1;
+  }
+  return { escalated };
+}
+
 function departmentScopeFilter(req: Request, tableAlias: string): { clause: string; params: (string | number)[] } {
   if (req.user!.role === 'DepartmentManager' && req.user!.departmentId) {
     return { clause: `AND ${tableAlias}.department_id = ?`, params: [req.user!.departmentId] };
@@ -2710,13 +2751,15 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     const rows = db
       .prepare(
         `SELECT src.id, src.comment_id, src.status, src.department_id, src.assigned_to, src.due_at, src.opened_at, src.closed_at, src.resolution_notes,
-                src.patient_contact_opt_in, src.patient_notified_at,
+                src.patient_contact_opt_in, src.patient_notified_at, src.escalation_level, src.improvement_plan_id,
                 u.full_name as assigned_to_name,
-                c.redacted_text, ca.severity, ca.category
+                c.redacted_text, ca.severity, ca.category,
+                qip.title as improvement_plan_title, qip.status as improvement_plan_status
          FROM service_recovery_cases src
          JOIN comments c ON c.id = src.comment_id
          JOIN comment_analyses ca ON ca.comment_id = c.id
          LEFT JOIN users u ON u.id = src.assigned_to
+         LEFT JOIN quality_improvement_plans qip ON qip.id = src.improvement_plan_id
          WHERE src.tenant_id = ? ${clause} ${status ? 'AND src.status = ?' : ''}
          ORDER BY src.opened_at DESC`
       )
@@ -2777,6 +2820,118 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         existing.id
       );
       logAudit(db, req.user!.tenantId, req.user!.id, 'case_assigned', 'service_recovery_case', existing.id, { assignedTo, dueAt });
+      res.json({ ok: true });
+    }
+  );
+
+  // -------------------------------------------------------------------------
+  // Quality improvement plans (RFP SRC-06) — corrective/preventive actions that a service
+  // recovery case can be linked to, so a recurring root cause gets fixed once, not re-litigated
+  // case by case, with a place to record whether the fix actually worked.
+  // -------------------------------------------------------------------------
+  router.get(
+    '/service-recovery/improvement-plans',
+    requireRole('SystemAdmin', 'QualityManager', 'DepartmentManager'),
+    (req: Request, res: Response) => {
+      const { clause, params } = departmentScopeFilter(req, 'qip');
+      const rows = db
+        .prepare(
+          `SELECT qip.id, qip.title, qip.corrective_action, qip.status, qip.due_date, qip.effectiveness_notes, qip.created_at,
+                  qip.department_id, d.name_ar as department_name_ar, u.full_name as owner_name
+           FROM quality_improvement_plans qip
+           LEFT JOIN departments d ON d.id = qip.department_id
+           LEFT JOIN users u ON u.id = qip.owner_user_id
+           WHERE qip.tenant_id = ? ${clause}
+           ORDER BY qip.created_at DESC`
+        )
+        .all(req.user!.tenantId, ...params);
+      res.json({ plans: rows });
+    }
+  );
+
+  router.post(
+    '/service-recovery/improvement-plans',
+    requireRole('SystemAdmin', 'QualityManager', 'DepartmentManager'),
+    express.json({ limit: '8kb' }),
+    (req: Request, res: Response) => {
+      const { title, correctiveAction, departmentId, ownerUserId, dueDate } = req.body as {
+        title?: string;
+        correctiveAction?: string;
+        departmentId?: string;
+        ownerUserId?: string;
+        dueDate?: string;
+      };
+      if (!title) {
+        res.status(400).json({ error: 'title_required' });
+        return;
+      }
+      if (req.user!.role === 'DepartmentManager' && departmentId && departmentId !== req.user!.departmentId) {
+        res.status(403).json({ error: 'forbidden' });
+        return;
+      }
+      const effectiveDeptId = req.user!.role === 'DepartmentManager' ? req.user!.departmentId : (departmentId ?? null);
+      const id = uid();
+      db.prepare(
+        'INSERT INTO quality_improvement_plans (id, tenant_id, department_id, title, corrective_action, owner_user_id, due_date) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run(id, req.user!.tenantId, effectiveDeptId, title, correctiveAction ?? null, ownerUserId ?? null, dueDate ?? null);
+      logAudit(db, req.user!.tenantId, req.user!.id, 'improvement_plan_created', 'quality_improvement_plan', id, { title });
+      res.status(201).json({ id });
+    }
+  );
+
+  router.patch(
+    '/service-recovery/improvement-plans/:id',
+    requireRole('SystemAdmin', 'QualityManager', 'DepartmentManager'),
+    express.json({ limit: '8kb' }),
+    (req: Request, res: Response) => {
+      const existing = db
+        .prepare('SELECT id, tenant_id, department_id FROM quality_improvement_plans WHERE id = ?')
+        .get(req.params.id) as { id: string; tenant_id: string; department_id: string | null } | undefined;
+      if (!existing || existing.tenant_id !== req.user!.tenantId) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      if (req.user!.role === 'DepartmentManager' && existing.department_id !== req.user!.departmentId) {
+        res.status(403).json({ error: 'forbidden' });
+        return;
+      }
+      const { status, effectivenessNotes } = req.body as { status?: string; effectivenessNotes?: string };
+      if (status !== undefined) db.prepare('UPDATE quality_improvement_plans SET status = ? WHERE id = ?').run(status, existing.id);
+      if (effectivenessNotes !== undefined)
+        db.prepare('UPDATE quality_improvement_plans SET effectiveness_notes = ? WHERE id = ?').run(effectivenessNotes, existing.id);
+      logAudit(db, req.user!.tenantId, req.user!.id, 'improvement_plan_updated', 'quality_improvement_plan', existing.id, { status });
+      res.json({ ok: true });
+    }
+  );
+
+  router.patch(
+    '/service-recovery/cases/:id/link-plan',
+    requireRole('SystemAdmin', 'QualityManager', 'DepartmentManager'),
+    express.json({ limit: '4kb' }),
+    (req: Request, res: Response) => {
+      const existingCase = db.prepare('SELECT id, tenant_id, department_id FROM service_recovery_cases WHERE id = ?').get(req.params.id) as
+        | { id: string; tenant_id: string; department_id: string }
+        | undefined;
+      if (!existingCase || existingCase.tenant_id !== req.user!.tenantId) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      if (req.user!.role === 'DepartmentManager' && existingCase.department_id !== req.user!.departmentId) {
+        res.status(403).json({ error: 'forbidden' });
+        return;
+      }
+      const { improvementPlanId } = req.body as { improvementPlanId: string | null };
+      if (improvementPlanId) {
+        const plan = db
+          .prepare('SELECT id FROM quality_improvement_plans WHERE id = ? AND tenant_id = ?')
+          .get(improvementPlanId, req.user!.tenantId);
+        if (!plan) {
+          res.status(400).json({ error: 'invalid_plan' });
+          return;
+        }
+      }
+      db.prepare('UPDATE service_recovery_cases SET improvement_plan_id = ? WHERE id = ?').run(improvementPlanId ?? null, existingCase.id);
+      logAudit(db, req.user!.tenantId, req.user!.id, 'case_linked_to_improvement_plan', 'service_recovery_case', existingCase.id, { improvementPlanId });
       res.json({ ok: true });
     }
   );

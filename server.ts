@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { createServer as createViteServer } from 'vite';
 import { openDatabase } from './server/db.ts';
 import { seedDatabase } from './server/seed.ts';
-import { createApi, autoSendDuePromsAssignments } from './server/api.ts';
+import { createApi, autoSendDuePromsAssignments, escalateOverdueCases } from './server/api.ts';
 import { defaultBackupDir, pruneOldBackups, runBackup } from './server/backup.ts';
 
 dotenv.config();
@@ -89,6 +89,15 @@ async function start() {
   runAutoSend();
   const autoSendTimer = setInterval(runAutoSend, PROMS_AUTO_SEND_INTERVAL_MS);
 
+  // Multi-level SLA escalation for overdue service recovery cases (RFP SRC-03).
+  const ESCALATION_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+  const runEscalationCheck = () => {
+    const { escalated } = escalateOverdueCases(db);
+    if (escalated) console.log(`Service recovery escalation: escalated ${escalated} overdue case(s)`);
+  };
+  runEscalationCheck();
+  const escalationTimer = setInterval(runEscalationCheck, ESCALATION_CHECK_INTERVAL_MS);
+
   // Daily automated backup (RPO/RTO target, RFP INF-05). Runs once at startup so a fresh
   // deployment always has a same-day snapshot, then on a configurable interval (default 24h).
   const backupDir = defaultBackupDir(root);
@@ -110,6 +119,7 @@ async function start() {
     server.close(() => {
       clearInterval(autoSendTimer);
       clearInterval(backupTimer);
+      clearInterval(escalationTimer);
       db.close();
       process.exit(0);
     });

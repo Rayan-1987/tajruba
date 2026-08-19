@@ -304,9 +304,43 @@ CREATE TABLE IF NOT EXISTS service_recovery_cases (
   patient_contact_phone TEXT,
   patient_notified_at TEXT,
   -- SLA deadline for closing the case, set when a QualityManager/DepartmentManager assigns it.
-  due_at TEXT
+  due_at TEXT,
+  -- Multi-level escalation (RFP SRC-03): 0 = not yet overdue, 1 = escalated to QualityManager,
+  -- 2 = escalated to executive management (SystemAdmin). See escalateOverdueCases in api.ts and
+  -- the case_escalations audit trail below.
+  escalation_level INTEGER NOT NULL DEFAULT 0,
+  -- Corrective/preventive action this case is linked to (RFP SRC-06), so a recurring problem
+  -- gets tracked and fixed, not just individually resolved case by case.
+  improvement_plan_id TEXT REFERENCES quality_improvement_plans(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_recovery_tenant ON service_recovery_cases(tenant_id);
+
+CREATE TABLE IF NOT EXISTS quality_improvement_plans (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  corrective_action TEXT,
+  owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  due_date TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  -- Free-text follow-up on whether the action actually worked, per SRC-06 ("متابعة فاعليته").
+  effectiveness_notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_qip_tenant ON quality_improvement_plans(tenant_id);
+
+-- Audit trail of escalation events, separate from the general audit_logs table so the
+-- service-recovery UI can show a case's own escalation history directly.
+CREATE TABLE IF NOT EXISTS case_escalations (
+  id TEXT PRIMARY KEY,
+  case_id TEXT NOT NULL REFERENCES service_recovery_cases(id) ON DELETE CASCADE,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  level INTEGER NOT NULL,
+  escalated_to_role TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_case_escalations_case ON case_escalations(case_id);
 
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,
