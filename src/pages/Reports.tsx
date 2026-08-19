@@ -209,6 +209,21 @@ export default function Reports() {
     return `/dashboard/reports/print?${p}`;
   }, [period]);
 
+  const scoresExportHref = (format: 'csv' | 'xlsx'): string => {
+    const p = new URLSearchParams();
+    if (serviceType) p.set('serviceType', serviceType);
+    if (departmentId) p.set('departmentId', departmentId);
+    p.set('format', format);
+    return `/api/reports/scores/export?${p}`;
+  };
+
+  const departmentsExportHref = (format: 'csv' | 'xlsx'): string => {
+    const p = new URLSearchParams();
+    if (serviceType) p.set('serviceType', serviceType);
+    p.set('format', format);
+    return `/api/reports/departments-breakdown/export?${p}`;
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -231,6 +246,12 @@ export default function Reports() {
           >
             تقرير شامل لكل الخدمات
           </Link>
+          <a href={scoresExportHref('xlsx')} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+            تصدير Excel
+          </a>
+          <a href={scoresExportHref('csv')} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+            تصدير CSV
+          </a>
         </div>
       </div>
 
@@ -355,7 +376,7 @@ export default function Reports() {
       {serviceType && (movers.increases.length > 0 || movers.declines.length > 0) && <MoversSection movers={movers} />}
 
       {serviceType && user?.role !== 'DepartmentManager' && (
-        <DepartmentsBreakdownSection data={deptBreakdown} />
+        <DepartmentsBreakdownSection data={deptBreakdown} exportHref={departmentsExportHref} />
       )}
     </div>
   );
@@ -604,9 +625,11 @@ function MoversSection({ movers }: { movers: { increases: MoverItem[]; declines:
 }
 
 function DepartmentsBreakdownSection({
-  data
+  data,
+  exportHref
 }: {
   data: { orgAverageTopBoxPercent: number | null; departments: DepartmentBreakdown[] };
+  exportHref: (format: 'csv' | 'xlsx') => string;
 }) {
   if (data.departments.length === 0) return null;
   const scatterData = data.departments.filter((d) => d.changeVsPreviousPeriod != null && d.deviationVsOrgAverage != null);
@@ -648,9 +671,19 @@ function DepartmentsBreakdownSection({
       </div>
 
       <div className="rounded-2xl bg-white p-4 shadow-sm">
-        <h3 className="mb-3 text-sm font-semibold text-slate-700">
-          مقارنة الأقسام — تفصيلي {data.orgAverageTopBoxPercent != null && `(متوسط المنشأة: ${data.orgAverageTopBoxPercent.toFixed(1)}%)`}
-        </h3>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold text-slate-700">
+            مقارنة الأقسام — تفصيلي {data.orgAverageTopBoxPercent != null && `(متوسط المنشأة: ${data.orgAverageTopBoxPercent.toFixed(1)}%)`}
+          </h3>
+          <div className="flex gap-2">
+            <a href={exportHref('xlsx')} className="text-xs font-semibold text-emerald-600 hover:underline">
+              تصدير Excel
+            </a>
+            <a href={exportHref('csv')} className="text-xs font-semibold text-emerald-600 hover:underline">
+              تصدير CSV
+            </a>
+          </div>
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full text-right text-xs">
             <thead>

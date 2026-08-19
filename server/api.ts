@@ -44,6 +44,7 @@ import {
 } from './sms.ts';
 import { composeEmployeeSurveyEmail, composeInvitationEmail, composePasswordResetEmail, createEmailProvider } from './email.ts';
 import { decryptPii, encryptPii } from './crypto.ts';
+import { sendCsv, sendXlsx, type ExportCell } from './export.ts';
 import { buildEnrollmentQrCode, consumeRecoveryCode, createMfaSecret, generateRecoveryCodes, verifyMfaToken } from './mfa.ts';
 import type { AnswerType, RecoveryStatus, Role, ServiceType } from './types.ts';
 
@@ -1886,6 +1887,48 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     });
   });
 
+  // Domain-level score summary as CSV/Excel (RFP ANL-09) — the same domain scores shown on the
+  // Reports page, flattened to one row per domain rather than the full per-question JSON tree.
+  router.get('/reports/scores/export', async (req: Request, res: Response) => {
+    const format = req.query.format === 'xlsx' ? 'xlsx' : 'csv';
+    const serviceType = req.query.serviceType as ServiceType | undefined;
+    const departmentId = req.query.departmentId as string | undefined;
+    if (req.user!.role === 'DepartmentManager' && departmentId && departmentId !== req.user!.departmentId) {
+      res.status(403).json({ error: 'forbidden' });
+      return;
+    }
+    const effectiveDeptId = req.user!.role === 'DepartmentManager' ? req.user!.departmentId : departmentId;
+
+    const domains = db
+      .prepare(
+        `SELECT id, code, name_ar, name_en, service_type, benchmark_top_box_percent FROM question_domains
+         WHERE tenant_id = ? AND active = 1 AND (? IS NULL OR service_type = ?)`
+      )
+      .all(req.user!.tenantId, serviceType ?? null, serviceType ?? null) as {
+      id: string;
+      code: string;
+      name_ar: string;
+      name_en: string;
+      service_type: string;
+      benchmark_top_box_percent: number;
+    }[];
+
+    const headers = ['المحور', 'الرمز', 'الخدمة', 'عدد الاستجابات', 'المتوسط', 'نسبة Top-Box %', 'المعيار المرجعي %', 'الفرق (نقطة مئوية)'];
+    const rows: ExportCell[][] = domains.map((domain) => {
+      // Only likert5 questions feed the pooled domain score — nps/yesno items have a different
+      // scale and are excluded here the same way /reports/scores excludes them (allDomainValues).
+      const likertQuestionIds = (
+        db.prepare("SELECT id FROM questions WHERE domain_id = ? AND active = 1 AND answer_type = 'likert5'").all(domain.id) as { id: string }[]
+      ).map((q) => q.id);
+      const allValues = likertQuestionIds.flatMap((qId) => fetchQuestionValues(req.user!.tenantId, qId, effectiveDeptId));
+      const score = scoreDomain(domain.id, allValues, domain.benchmark_top_box_percent);
+      return [domain.name_ar, domain.code, domain.service_type, score.n, score.mean, score.topBoxPercent, domain.benchmark_top_box_percent, score.diffPercentPoints];
+    });
+
+    if (format === 'xlsx') await sendXlsx(res, 'tajruba-scores', 'المحاور', headers, rows);
+    else sendCsv(res, 'tajruba-scores', headers, rows);
+  });
+
   const TREND_PERIOD_EXPR: Record<'day' | 'month' | 'quarter' | 'half' | 'year', string> = {
     day: "strftime('%Y-%m-%d', r.submitted_at)",
     month: "strftime('%Y-%m', r.submitted_at)",
@@ -2110,6 +2153,66 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     });
 
     res.json({ orgAverageTopBoxPercent: orgAvg, smallSampleThreshold: SMALL_SAMPLE_THRESHOLD, departments: withPercentile });
+  });
+
+  // Departments breakdown as CSV/Excel (RFP ANL-09) — reuses the exact same criterion-question
+  // and rolling-window logic as /reports/departments-breakdown above, flattened for export.
+  router.get('/reports/departments-breakdown/export', async (req: Request, res: Response) => {
+    const format = req.query.format === 'xlsx' ? 'xlsx' : 'csv';
+    const serviceType = req.query.serviceType as ServiceType | undefined;
+    if (!serviceType) {
+      res.status(400).json({ error: 'service_type_required' });
+      return;
+    }
+    if (req.user!.role === 'DepartmentManager') {
+      res.status(403).json({ error: 'forbidden' });
+      return;
+    }
+    const overallDomain = db
+      .prepare("SELECT id FROM question_domains WHERE tenant_id = ? AND service_type = ? AND code LIKE '%\\_OVR' ESCAPE '\\'")
+      .get(req.user!.tenantId, serviceType) as { id: string } | undefined;
+    const criterionQuestion = overallDomain
+      ? (db
+          .prepare("SELECT id FROM questions WHERE domain_id = ? AND answer_type = 'likert5' AND active = 1 ORDER BY sort_order LIMIT 1")
+          .get(overallDomain.id) as { id: string } | undefined)
+      : undefined;
+
+    const headers = ['القسم', 'عدد الاستجابات', 'نسبة Top-Box الحالية %', 'الفترة السابقة %', 'التغير', 'الانحراف عن متوسط المنشأة', 'الترتيب المئيني الداخلي'];
+    let rows: ExportCell[][] = [];
+    if (criterionQuestion) {
+      const departments = db
+        .prepare('SELECT id, name_ar FROM departments WHERE tenant_id = ? AND service_type = ? AND active = 1')
+        .all(req.user!.tenantId, serviceType) as { id: string; name_ar: string }[];
+      const windows = rollingWindows();
+      const orgCurrentValues = fetchQuestionValues(req.user!.tenantId, criterionQuestion.id, undefined, windows.curFrom, windows.curTo);
+      const orgAvg = primaryMetric('likert5', orgCurrentValues);
+
+      const computed = departments.map((dept) => {
+        const curValues = fetchQuestionValues(req.user!.tenantId, criterionQuestion.id, dept.id, windows.curFrom, windows.curTo);
+        const prevValues = fetchQuestionValues(req.user!.tenantId, criterionQuestion.id, dept.id, windows.prevFrom, windows.prevTo);
+        const curMetric = primaryMetric('likert5', curValues);
+        const prevMetric = primaryMetric('likert5', prevValues);
+        return {
+          nameAr: dept.name_ar,
+          n: curValues.length,
+          curMetric,
+          prevMetric,
+          change: curMetric != null && prevMetric != null ? round2(curMetric - prevMetric) : null,
+          deviation: curMetric != null && orgAvg != null ? round2(curMetric - orgAvg) : null
+        };
+      });
+      const scored = computed.filter((r) => r.curMetric != null);
+      rows = computed.map((r) => {
+        const percentile =
+          r.curMetric == null || scored.length <= 1
+            ? null
+            : round2((scored.filter((o) => (o.curMetric as number) <= (r.curMetric as number)).length / scored.length) * 100);
+        return [r.nameAr, r.n, r.curMetric, r.prevMetric, r.change, r.deviation, percentile];
+      });
+    }
+
+    if (format === 'xlsx') await sendXlsx(res, 'tajruba-departments', 'الأقسام', headers, rows);
+    else sendCsv(res, 'tajruba-departments', headers, rows);
   });
 
   // Greatest movers: the questions with the largest positive/negative change vs the last rolling
