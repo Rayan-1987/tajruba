@@ -44,6 +44,7 @@ export default function EmployeeSurvey() {
   const [error, setError] = useState<string | null>(null);
   const [language, setLanguage] = useState<'ar' | 'en'>('ar');
   const [answers, setAnswers] = useState<Record<string, number>>({});
+  const [textAnswers, setTextAnswers] = useState<Record<string, string>>({});
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -93,14 +94,21 @@ export default function EmployeeSurvey() {
   }
 
   const allQuestions = survey.domains.flatMap((d) => d.questions);
-  const answeredCount = allQuestions.filter((q) => answers[q.id] !== undefined).length;
+  // Open-ended questions are optional, matching the backend's submit validation.
+  const requiredQuestions = allQuestions.filter((q) => q.answerType !== 'text');
+  const answeredCount = requiredQuestions.filter((q) => answers[q.id] !== undefined).length;
   const t = STRINGS[language];
 
   const submit = async () => {
     setSubmitting(true);
     try {
       await api.post(`/public/employee-survey/${token}/submit`, {
-        answers: Object.entries(answers).map(([questionId, value]) => ({ questionId, value }))
+        answers: [
+          ...Object.entries(answers).map(([questionId, value]) => ({ questionId, value })),
+          ...Object.entries(textAnswers)
+            .filter(([, text]) => text.trim())
+            .map(([questionId, text]) => ({ questionId, text: text.trim() }))
+        ]
       });
       setSubmitted(true);
     } catch {
@@ -129,7 +137,7 @@ export default function EmployeeSurvey() {
         <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-200">
           <div
             className="h-full rounded-full bg-emerald-500 transition-all"
-            style={{ width: `${Math.min(100, (answeredCount / Math.max(1, allQuestions.length)) * 100)}%` }}
+            style={{ width: `${Math.min(100, (answeredCount / Math.max(1, requiredQuestions.length)) * 100)}%` }}
           />
         </div>
       </header>
@@ -139,16 +147,29 @@ export default function EmployeeSurvey() {
           <section key={domain.id}>
             <h2 className="mb-2 px-1 text-sm font-semibold text-slate-500">{language === 'en' ? domain.nameEn : domain.nameAr}</h2>
             <div className="space-y-3">
-              {domain.questions.map((q) => (
-                <SurveyQuestionCard
-                  key={q.id}
-                  question={{ id: q.id, code: q.id, text_ar: q.textAr, text_en: q.textEn, answer_type: q.answerType, depends_on_code: null }}
-                  value={answers[q.id]}
-                  language={language}
-                  onSelect={(value) => setAnswers((prev) => ({ ...prev, [q.id]: value }))}
-                  onSelectWithClear={(value) => setAnswers((prev) => ({ ...prev, [q.id]: value }))}
-                />
-              ))}
+              {domain.questions.map((q) =>
+                q.answerType === 'text' ? (
+                  <div key={q.id} className="rounded-2xl bg-white p-4 shadow-sm">
+                    <p className="mb-2 font-medium text-slate-800">{language === 'en' ? q.textEn : q.textAr}</p>
+                    <textarea
+                      value={textAnswers[q.id] ?? ''}
+                      onChange={(e) => setTextAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))}
+                      rows={3}
+                      className="w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-emerald-400 focus:outline-none"
+                      placeholder={language === 'en' ? 'Optional' : 'اختياري'}
+                    />
+                  </div>
+                ) : (
+                  <SurveyQuestionCard
+                    key={q.id}
+                    question={{ id: q.id, code: q.id, text_ar: q.textAr, text_en: q.textEn, answer_type: q.answerType, depends_on_code: null }}
+                    value={answers[q.id]}
+                    language={language}
+                    onSelect={(value) => setAnswers((prev) => ({ ...prev, [q.id]: value }))}
+                    onSelectWithClear={(value) => setAnswers((prev) => ({ ...prev, [q.id]: value }))}
+                  />
+                )
+              )}
             </div>
           </section>
         ))}
@@ -157,7 +178,7 @@ export default function EmployeeSurvey() {
       <div className="fixed inset-x-0 bottom-0 border-t border-slate-200 bg-white p-4">
         <button
           type="button"
-          disabled={submitting || answeredCount < allQuestions.length}
+          disabled={submitting || answeredCount < requiredQuestions.length}
           onClick={submit}
           className="mx-auto block w-full max-w-xl rounded-xl bg-emerald-600 py-3 text-center font-semibold text-white transition disabled:cursor-not-allowed disabled:bg-slate-300"
         >

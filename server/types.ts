@@ -35,7 +35,7 @@ export const ANCILLARY_LABELS_AR: Record<AncillaryService, string> = {
 
 export type AnswerType = 'likert5' | 'nps' | 'yesno' | 'text' | 'vas';
 
-export type InvitationChannel = 'sms' | 'whatsapp' | 'phone';
+export type InvitationChannel = 'sms' | 'whatsapp' | 'phone' | 'email';
 
 export type InvitationStatus = 'pending' | 'sent' | 'opened' | 'completed' | 'expired';
 

@@ -21,8 +21,10 @@ import {
   RELIABLE_SAMPLE_THRESHOLD,
   SMALL_SAMPLE_THRESHOLD,
   pearsonCorrelation,
+  scoreAgreePercent,
   scoreDistribution,
   scoreDomain,
+  scorePromoterPercent,
   scoreInstrument,
   scoreNps,
   scoreQuestion,
@@ -40,7 +42,7 @@ import {
   createSmsProvider,
   type TenantSmsConfig
 } from './sms.ts';
-import { composeEmployeeSurveyEmail, composePasswordResetEmail, createEmailProvider } from './email.ts';
+import { composeEmployeeSurveyEmail, composeInvitationEmail, composePasswordResetEmail, createEmailProvider } from './email.ts';
 import { decryptPii, encryptPii } from './crypto.ts';
 import { buildEnrollmentQrCode, consumeRecoveryCode, createMfaSecret, generateRecoveryCodes, verifyMfaToken } from './mfa.ts';
 import type { AnswerType, RecoveryStatus, Role, ServiceType } from './types.ts';
@@ -1299,21 +1301,35 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     }
     const validQuestions = db
       .prepare(
-        `SELECT id FROM employee_survey_questions
+        `SELECT id, answer_type FROM employee_survey_questions
          WHERE domain_id IN (SELECT id FROM employee_survey_domains WHERE instrument_id = ?) AND active = 1`
       )
-      .all(invitation.instrument_id) as { id: string }[];
-    const validQuestionIds = new Set(validQuestions.map((q) => q.id));
+      .all(invitation.instrument_id) as { id: string; answer_type: string }[];
+    const answerTypeById = new Map(validQuestions.map((q) => [q.id, q.answer_type]));
+    // Open-ended questions (answer_type 'text') are optional — the hospital's own instrument
+    // sees a meaningfully lower response rate on its three open questions than on the scored
+    // items, so submission only requires every non-text question to be answered.
+    const requiredQuestionIds = new Set(validQuestions.filter((q) => q.answer_type !== 'text').map((q) => q.id));
 
-    const body = req.body as { answers?: { questionId: string; value: number }[] };
+    const body = req.body as { answers?: { questionId: string; value?: number; text?: string }[] };
     if (!Array.isArray(body.answers) || body.answers.length === 0) {
       res.status(400).json({ error: 'invalid_answers' });
       return;
     }
-    const clean = body.answers.filter(
-      (a) => validQuestionIds.has(a.questionId) && typeof a.value === 'number' && Number.isFinite(a.value)
-    );
-    if (clean.length < validQuestionIds.size) {
+    const numericAnswers: { questionId: string; value: number }[] = [];
+    const textAnswers: { questionId: string; text: string }[] = [];
+    for (const answer of body.answers) {
+      const answerType = answerTypeById.get(answer.questionId);
+      if (!answerType) continue;
+      if (answerType === 'text') {
+        if (typeof answer.text === 'string' && answer.text.trim()) textAnswers.push({ questionId: answer.questionId, text: answer.text.trim() });
+      } else if (typeof answer.value === 'number' && Number.isFinite(answer.value)) {
+        numericAnswers.push({ questionId: answer.questionId, value: answer.value });
+      }
+    }
+    const requiredAnswered = new Set(numericAnswers.map((a) => a.questionId));
+    const missingRequired = [...requiredQuestionIds].some((id) => !requiredAnswered.has(id));
+    if (missingRequired) {
       res.status(400).json({ error: 'incomplete_answers' });
       return;
     }
@@ -1325,9 +1341,13 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     db.prepare(
       'INSERT INTO employee_survey_responses (id, tenant_id, instrument_id, department_id, job_category, submitted_at) VALUES (?, ?, ?, ?, ?, ?)'
     ).run(responseId, invitation.tenant_id, invitation.instrument_id, invitation.department_id, invitation.job_category, new Date().toISOString());
-    const insertAnswer = db.prepare('INSERT INTO employee_survey_answers (id, response_id, question_id, value_numeric) VALUES (?, ?, ?, ?)');
-    for (const answer of clean) {
-      insertAnswer.run(uid(), responseId, answer.questionId, answer.value);
+    const insertNumericAnswer = db.prepare('INSERT INTO employee_survey_answers (id, response_id, question_id, value_numeric) VALUES (?, ?, ?, ?)');
+    for (const answer of numericAnswers) {
+      insertNumericAnswer.run(uid(), responseId, answer.questionId, answer.value);
+    }
+    const insertTextAnswer = db.prepare('INSERT INTO employee_survey_answers (id, response_id, question_id, value_text) VALUES (?, ?, ?, ?)');
+    for (const answer of textAnswers) {
+      insertTextAnswer.run(uid(), responseId, answer.questionId, answer.text);
     }
     db.prepare("UPDATE employee_survey_invitations SET status = 'completed' WHERE id = ?").run(invitation.id);
 
@@ -2516,10 +2536,10 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     express.json({ limit: '256kb' }),
     async (req: Request, res: Response) => {
       const { rows, templateId, departmentId, channel, providerName } = req.body as {
-        rows?: { phone: string }[];
+        rows?: { phone?: string; email?: string }[];
         templateId?: string;
         departmentId?: string;
-        channel?: 'sms' | 'whatsapp' | 'phone';
+        channel?: 'sms' | 'whatsapp' | 'phone' | 'email';
         providerName?: string;
       };
       if (!Array.isArray(rows) || rows.length === 0 || !templateId || !departmentId) {
@@ -2540,6 +2560,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
 
       const smsConfig = getTenantSmsConfig(db, req.user!.tenantId);
       const provider = createSmsProvider(smsConfig);
+      const emailProvider = createEmailProvider();
       const baseUrl = `${req.protocol}://${req.get('host')}`;
       const effectiveChannel = channel ?? 'sms';
 
@@ -2554,9 +2575,13 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       let sent = 0;
       let skipped = 0;
       for (const row of rows) {
-        if (!row.phone) continue;
-        const phoneHash = sha256(row.phone);
-        if (!isEligibleForInvitation(db, req.user!.tenantId, phoneHash).eligible) {
+        // For an email-channel batch, patient_phone_hash holds a hash of the email address
+        // instead of a phone number — same DNC/cooldown eligibility semantics, just a different
+        // contact identifier, so no schema change is needed for this new channel.
+        const contact = effectiveChannel === 'email' ? row.email : row.phone;
+        if (!contact) continue;
+        const contactHash = sha256(contact);
+        if (!isEligibleForInvitation(db, req.user!.tenantId, contactHash).eligible) {
           skipped += 1;
           continue;
         }
@@ -2565,7 +2590,13 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         if (effectiveChannel === 'sms' || effectiveChannel === 'whatsapp') {
           const surveyUrl = `${baseUrl}/s/${rawToken}`;
           const message = composeInvitationMessage(template.name_ar, template.name_en, surveyUrl, smsConfig.defaultLanguage);
-          const result = await provider.send(row.phone, message);
+          const result = await provider.send(contact, message);
+          status = result.ok ? 'sent' : 'pending';
+          if (result.ok) sent += 1;
+        } else if (effectiveChannel === 'email') {
+          const surveyUrl = `${baseUrl}/s/${rawToken}`;
+          const { subject, body } = composeInvitationEmail(template.name_ar, template.name_en, surveyUrl, smsConfig.defaultLanguage);
+          const result = await emailProvider.send(contact, subject, body);
           status = result.ok ? 'sent' : 'pending';
           if (result.ok) sent += 1;
         }
@@ -2576,7 +2607,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
           departmentId,
           template.service_type,
           sha256(rawToken),
-          phoneHash,
+          contactHash,
           effectiveChannel,
           status,
           expires,
@@ -3629,12 +3660,13 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       const answerRows = db
         .prepare(
           `SELECT esr.department_id, esd.id as domain_id, esd.name_ar as domain_name_ar, esd.name_en as domain_name_en,
-                  esd.is_driver, esq.is_overall, esa.value_numeric as value
+                  esd.is_driver, esq.is_overall, esq.answer_type, esa.value_numeric as value
            FROM employee_survey_answers esa
            JOIN employee_survey_questions esq ON esq.id = esa.question_id
            JOIN employee_survey_domains esd ON esd.id = esq.domain_id
            JOIN employee_survey_responses esr ON esr.id = esa.response_id
-           WHERE esr.tenant_id = ? AND esr.instrument_id = ? ${effectiveDeptId ? 'AND esr.department_id = ?' : ''}`
+           WHERE esr.tenant_id = ? AND esr.instrument_id = ? AND esq.answer_type != 'text'
+                 ${effectiveDeptId ? 'AND esr.department_id = ?' : ''}`
         )
         .all(...[req.user!.tenantId, instrumentId, ...(effectiveDeptId ? [effectiveDeptId] : [])]) as {
         department_id: string | null;
@@ -3643,6 +3675,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         domain_name_en: string;
         is_driver: number;
         is_overall: number;
+        answer_type: string;
         value: number;
       }[];
 
@@ -3653,20 +3686,36 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         .get(...[req.user!.tenantId, instrumentId, ...(effectiveDeptId ? [effectiveDeptId] : [])]) as { n: number };
 
       if (respondentCount.n < MIN_GROUP_SIZE_FOR_REPORTING) {
-        res.json({ n: respondentCount.n, suppressed: true, minGroupSize: MIN_GROUP_SIZE_FOR_REPORTING, staffSatisfactionScore: null, engagementScore: null, domains: [] });
+        res.json({
+          n: respondentCount.n,
+          suppressed: true,
+          minGroupSize: MIN_GROUP_SIZE_FOR_REPORTING,
+          participationRate: null,
+          enps: null,
+          avgRecommendation: null,
+          domains: []
+        });
         return;
       }
 
-      const driverValues = answerRows.filter((r) => r.is_driver === 1).map((r) => r.value);
-      const overallValues = answerRows.filter((r) => r.is_overall === 1).map((r) => r.value);
-      const staffSatisfactionScore = scoreDomain('staff_satisfaction', driverValues, null).topBoxPercent;
-      const engagementScore = scoreDomain('engagement', overallValues, null).topBoxPercent;
+      // The eNPS (0-10) domain uses a different metric (% scoring 9-10, per MOH KPI 5.1.1) than
+      // every likert domain (% scoring 4-5) — pooling the two scales together would corrupt both,
+      // so it is computed and reported separately rather than appearing in `domains`.
+      const npsRows = answerRows.filter((r) => r.answer_type === 'nps');
+      const likertRows = answerRows.filter((r) => r.answer_type !== 'nps');
+      const promoterScore = scorePromoterPercent(npsRows.map((r) => r.value));
 
-      const domainIds = [...new Set(answerRows.map((r) => r.domain_id))];
+      // "Participation rate" mirrors the hospital's own "معدل المشاركة" methodology: the % of
+      // answers rating 4-5 across every driver (non-outcome) likert domain.
+      const driverValues = likertRows.filter((r) => r.is_driver === 1).map((r) => r.value);
+      const participationRate = scoreAgreePercent(driverValues).agreePercent;
+
+      const domainIds = [...new Set(likertRows.map((r) => r.domain_id))];
       const domains = domainIds.map((domainId) => {
-        const rowsForDomain = answerRows.filter((r) => r.domain_id === domainId);
-        const score = scoreDomain(domainId, rowsForDomain.map((r) => r.value), null);
+        const rowsForDomain = likertRows.filter((r) => r.domain_id === domainId);
+        const score = scoreAgreePercent(rowsForDomain.map((r) => r.value));
         return {
+          domainId,
           nameAr: rowsForDomain[0].domain_name_ar,
           nameEn: rowsForDomain[0].domain_name_en,
           isDriver: rowsForDomain[0].is_driver === 1,
@@ -3692,7 +3741,15 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
           }))
         : [];
 
-      res.json({ n: respondentCount.n, suppressed: false, staffSatisfactionScore, engagementScore, domains, departmentBreakdown });
+      res.json({
+        n: respondentCount.n,
+        suppressed: false,
+        participationRate,
+        enps: promoterScore.promoterPercent,
+        avgRecommendation: promoterScore.mean,
+        domains,
+        departmentBreakdown
+      });
     }
   );
 

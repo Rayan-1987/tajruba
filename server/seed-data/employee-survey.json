@@ -2,68 +2,130 @@
   "instruments": [
     {
       "code": "EES_ANNUAL",
-      "nameAr": "استبانة تجربة وارتباط الموظف السنوية",
-      "nameEn": "Annual Employee Experience & Engagement Survey",
+      "nameAr": "استبانة مشاركة ورضا الموظفين السنوية",
+      "nameEn": "Annual Staff Engagement & Satisfaction Survey",
       "kind": "annual",
       "domains": [
         {
-          "code": "LEAD",
-          "nameAr": "القيادة والدعم الإداري",
-          "nameEn": "Leadership & Managerial Support",
+          "code": "EMP",
+          "nameAr": "الموظف",
+          "nameEn": "Employee",
           "isDriver": true,
           "questions": [
-            { "textAr": "مديري المباشر يدعمني ويستمع لملاحظاتي", "textEn": "My direct manager supports me and listens to my feedback" },
-            { "textAr": "قيادة الإدارة تتخذ قرارات واضحة ومتسقة", "textEn": "Leadership makes clear and consistent decisions" }
+            { "textAr": "أشعر بالحافز لأداء أفضل ما لدي في هذه المستشفى", "textEn": "I feel motivated to do my best work at this hospital" },
+            { "textAr": "أحب العمل الذي أقوم به", "textEn": "I like the work I do" },
+            { "textAr": "مسؤولياتي الوظيفية واضحة بالنسبة لي", "textEn": "My job responsibilities are clear" },
+            { "textAr": "يمكنني إدارة عبء العمل بما يتيح لي الحفاظ على توازن صحي", "textEn": "My workload is manageable and allows a healthy balance" },
+            {
+              "textAr": "تلقيت توجيهاً تعريفياً كافياً عند التحاقي بالعمل (يشمل الهيكل التنظيمي والسياسات)",
+              "textEn": "I received adequate orientation when I joined (incl. org chart & policies)"
+            },
+            { "textAr": "تتاح لي فرص للتعلم والنمو وتطوير مسيرتي المهنية هنا", "textEn": "I have opportunities to learn, grow, and advance here" },
+            { "textAr": "أحصل على التدريب الذي أحتاجه لأداء عملي بشكل جيد", "textEn": "I get the training I need to do a good job" },
+            { "textAr": "أحصل على تقدير ذي معنى عندما أؤدي عملاً جيدًا", "textEn": "I receive meaningful recognition when I do good work" },
+            { "textAr": "أنا راضٍ عن مستوى الأمان والاستقرار الوظيفي الذي أحظى به", "textEn": "I am satisfied with my job security" },
+            { "textAr": "راتبي عادل مقارنةً بجهات العمل الصحية الأخرى في المنطقة", "textEn": "My pay is fair vs. other healthcare employers in this area" },
+            { "textAr": "أعرف كيف أحصل على الدعم النفسي عند الحاجة إليه", "textEn": "I know how to access psychological support when needed" }
           ]
         },
         {
-          "code": "GROWTH",
-          "nameAr": "التقدير والتطوير المهني",
-          "nameEn": "Recognition & Professional Growth",
+          "code": "MGR",
+          "nameAr": "المدير المباشر",
+          "nameEn": "Direct Manager",
           "isDriver": true,
           "questions": [
-            { "textAr": "أشعر بالتقدير على الجهد الذي أبذله في عملي", "textEn": "I feel recognized for the effort I put into my work" },
-            { "textAr": "تتوفر لي فرص حقيقية للتطور المهني والتدريب", "textEn": "I have real opportunities for professional development and training" }
+            { "textAr": "المسؤول المباشر الذي أرفع له التقارير يعاملني باحترام", "textEn": "The person I report to treats me with respect" },
+            { "textAr": "المسؤول المباشر الذي أرفع له التقارير يهتم برضاي الوظيفي", "textEn": "The person I report to cares about my job satisfaction" },
+            { "textAr": "أحصل على الدعم الذي أحتاجه من مديري المباشر", "textEn": "I get the support I need from my manager" },
+            { "textAr": "المسؤول المباشر الذي أرفع له التقارير يتمتع بمهارات تواصل جيدة", "textEn": "The person I report to is a good communicator" },
+            { "textAr": "يشجع المسؤول المباشر تبادل الآراء والأفكار بحرية", "textEn": "The person I report to supports free exchange of ideas" },
+            { "textAr": "يهتم المسؤول المباشر بتحسين الجودة", "textEn": "The person I report to cares about quality improvement" },
+            { "textAr": "ساعدتني ملاحظات آخر تقييم أداء بتحسين أدائي", "textEn": "My last appraisal helped me to improve my performance" }
           ]
         },
         {
-          "code": "WORKLOAD",
-          "nameAr": "عبء العمل وبيئة العمل",
-          "nameEn": "Workload & Work Environment",
+          "code": "ORG",
+          "nameAr": "المنظمة / المستشفى",
+          "nameEn": "Organization",
           "isDriver": true,
           "questions": [
-            { "textAr": "عبء العمل الموكل لي معقول ويسمح بأداء عملي بجودة", "textEn": "My workload is reasonable and allows me to do quality work" },
-            { "textAr": "بيئة العمل المادية والتجهيزات مناسبة لأداء مهامي", "textEn": "The physical work environment and equipment support my duties" }
+            { "textAr": "تُبلِّغ الإدارة بالقرارات المهمة في الوقت المناسب وبطريقة واضحة", "textEn": "Administration communicates decisions timely and clearly" },
+            {
+              "textAr": "تشارك القيادة العليا بفاعلية في مبادرات تحسين الجودة وتوفّر الموارد اللازمة لها",
+              "textEn": "Senior leadership actively engages in and resources quality improvement"
+            },
+            { "textAr": "أشارك في اتخاذ القرارات التي تؤثر على عملي", "textEn": "I am involved in decisions that affect my work" },
+            { "textAr": "لديّ الدعم والموارد والأدوات التي أحتاجها لتقديم أفضل رعاية أو خدمة", "textEn": "I have the support, resources and tools to provide the best care" },
+            { "textAr": "وحدة العمل التي أعمل بها تعمل بروح الفريق بشكل جيد", "textEn": "My work unit works well together" },
+            {
+              "textAr": "يلتزم الموظفون في وحدة عملي بالإجراءات الصحيحة لرعاية المرضى وخدمة العملاء",
+              "textEn": "My unit follows proper procedures for patient care and service"
+            },
+            { "textAr": "يوفر المستشفى بيئة تمكّن من تقديم رعاية عالية الجودة للمرضى", "textEn": "The hospital enables high-quality patient care" },
+            {
+              "textAr": "يعامل المستشفى الموظفين باحترام ويقدّر مختلف الخلفيات والثقافات",
+              "textEn": "The hospital treats staff with respect and values diversity"
+            },
+            { "textAr": "يدعمني المستشفى في تحقيق التوازن بين حياتي العملية والشخصية", "textEn": "The hospital supports my work-life balance" },
+            { "textAr": "لديّ ثقة بأن المستشفى سيحقق النجاح خلال السنوات القادمة", "textEn": "I am confident the hospital will succeed in coming years" },
+            { "textAr": "سيتم استخدام نتائج هذا الاستبيان لإجراء تحسينات فعلية", "textEn": "Survey results will be used to make real improvements" },
+            { "textAr": "سلامة المرضى تُعد أولوية في المستشفى", "textEn": "Patient safety is a priority in the hospital" },
+            { "textAr": "يهتم المستشفى بسلامة الموظفين", "textEn": "The hospital cares about employee safety" },
+            { "textAr": "أستطيع إبلاغ مديري المباشر عن خطأ أو مشكلة دون خوف من اللوم", "textEn": "I can report a mistake or problem without fear of blame" },
+            {
+              "textAr": "أعرف كيف أبلّغ عن حادث أو خطأ من خلال نظام الإبلاغ في المستشفى (OVR)",
+              "textEn": "I know how to report an incident via the hospital reporting system (OVR)"
+            },
+            { "textAr": "نتعلّم من الأخطاء والحوادث لتحسين العمل بدلاً من معاقبة الأفراد", "textEn": "We learn from errors rather than punishing individuals" },
+            { "textAr": "كانت لدينا خطة للتعامل مع نقص الإمدادات قبل أن تصبح المشكلة قائمة", "textEn": "We had a plan for supply shortages before they arose" }
           ]
         },
         {
-          "code": "COMM",
-          "nameAr": "التواصل والمشاركة في القرار",
-          "nameEn": "Communication & Voice",
-          "isDriver": true,
-          "questions": [
-            { "textAr": "أُبلَّغ بالتغييرات التي تخص عملي في وقت مناسب", "textEn": "I am informed of changes affecting my work in a timely manner" },
-            { "textAr": "رأيي يؤخذ بعين الاعتبار في القرارات التي تخص قسمي", "textEn": "My opinion is considered in decisions affecting my department" }
-          ]
-        },
-        {
-          "code": "WELLBEING",
-          "nameAr": "التوازن والرفاهية النفسية",
-          "nameEn": "Work-Life Balance & Wellbeing",
-          "isDriver": true,
-          "questions": [
-            { "textAr": "أستطيع تحقيق توازن مناسب بين عملي وحياتي الشخصية", "textEn": "I can maintain a reasonable balance between my work and personal life" },
-            { "textAr": "لا أشعر بإرهاق أو ضغط نفسي مستمر بسبب العمل", "textEn": "I do not feel constant burnout or psychological strain because of work" }
-          ]
-        },
-        {
-          "code": "OVR",
-          "nameAr": "الارتباط الوظيفي العام",
-          "nameEn": "Overall Engagement",
+          "code": "ENGAGEMENT",
+          "nameAr": "مؤشر الارتباط",
+          "nameEn": "Engagement Indicator",
           "isDriver": false,
           "questions": [
-            { "textAr": "أنصح بهذه الجهة كمكان عمل جيد لأصدقائي وزملائي", "textEn": "I would recommend this organization as a good place to work", "isOverall": true },
-            { "textAr": "أنوي الاستمرار في العمل بهذه الجهة خلال العامين القادمين", "textEn": "I intend to continue working at this organization over the next two years" }
+            { "textAr": "أرغب في الاستمرار بالعمل في المستشفى بعد ثلاث سنوات من الآن", "textEn": "I would like to be working here three years from now", "isOverall": true },
+            { "textAr": "لا أفكّر جدياً في ترك العمل خلال الاثني عشر شهراً القادمة", "textEn": "I am not seriously considering leaving within 12 months", "isOverall": true },
+            { "textAr": "أشعر بالفخر عندما أخبر الآخرين أنني أعمل في هذا المستشفى", "textEn": "I am proud to tell people I work here", "isOverall": true },
+            { "textAr": "أوصي بهذا المستشفى باعتباره مكاناً ممتازاً للعمل", "textEn": "I would recommend this hospital as a great place to work", "isOverall": true }
+          ]
+        },
+        {
+          "code": "ENPS",
+          "nameAr": "مؤشر التوصية (eNPS)",
+          "nameEn": "Recommendation Score (eNPS)",
+          "isDriver": false,
+          "questions": [
+            {
+              "textAr": "على مقياس من 0 إلى 10، ما مدى احتمال أن توصي بهذا المستشفى للعمل لزميل أو صديق؟",
+              "textEn": "On a scale of 0 to 10, how likely are you to recommend this hospital as a place to work to a colleague or friend?",
+              "answerType": "nps"
+            }
+          ]
+        },
+        {
+          "code": "OPEN_FEEDBACK",
+          "nameAr": "ملاحظات مفتوحة",
+          "nameEn": "Open Feedback",
+          "isDriver": false,
+          "questions": [
+            {
+              "textAr": "ما الشيء الوحيد الذي قد يحسّن تجربتك في العمل هنا أكثر من غيره؟",
+              "textEn": "What is the one thing that would most improve your experience here?",
+              "answerType": "text"
+            },
+            {
+              "textAr": "ما أكثر ما تقدّره في عملك في هذا المستشفى؟",
+              "textEn": "What do you value most about working here?",
+              "answerType": "text"
+            },
+            {
+              "textAr": "ما أكبر عائق يواجهك في أداء عملك بشكل جيد؟",
+              "textEn": "What is the biggest obstacle to doing your job well?",
+              "answerType": "text"
+            }
           ]
         }
       ]
@@ -75,32 +137,32 @@
       "kind": "pulse",
       "domains": [
         {
-          "code": "LEAD",
-          "nameAr": "القيادة والدعم الإداري",
-          "nameEn": "Leadership & Managerial Support",
+          "code": "EMP",
+          "nameAr": "الموظف",
+          "nameEn": "Employee",
           "isDriver": true,
-          "questions": [{ "textAr": "أشعر بدعم مديري المباشر هذا الأسبوع", "textEn": "I felt supported by my direct manager this week" }]
+          "questions": [{ "textAr": "استطعت إدارة عبء عملي هذه الفترة دون ضغط زائد", "textEn": "I was able to manage my workload this period without excess pressure" }]
         },
         {
-          "code": "WORKLOAD",
-          "nameAr": "عبء العمل وبيئة العمل",
-          "nameEn": "Workload & Work Environment",
+          "code": "MGR",
+          "nameAr": "المدير المباشر",
+          "nameEn": "Direct Manager",
           "isDriver": true,
-          "questions": [{ "textAr": "عبء عملي كان معقولاً هذه الفترة", "textEn": "My workload felt reasonable this period" }]
+          "questions": [{ "textAr": "شعرت بدعم مديري المباشر هذه الفترة", "textEn": "I felt supported by my direct manager this period" }]
         },
         {
-          "code": "WELLBEING",
-          "nameAr": "التوازن والرفاهية النفسية",
-          "nameEn": "Work-Life Balance & Wellbeing",
+          "code": "ORG",
+          "nameAr": "المنظمة / المستشفى",
+          "nameEn": "Organization",
           "isDriver": true,
-          "questions": [{ "textAr": "لم أشعر بإرهاق ملحوظ هذه الفترة", "textEn": "I did not feel notable burnout this period" }]
+          "questions": [{ "textAr": "توفرت لدي الموارد والأدوات التي أحتاجها هذه الفترة", "textEn": "I had the resources and tools I needed this period" }]
         },
         {
-          "code": "OVR",
-          "nameAr": "الارتباط الوظيفي العام",
-          "nameEn": "Overall Engagement",
+          "code": "ENGAGEMENT",
+          "nameAr": "مؤشر الارتباط",
+          "nameEn": "Engagement Indicator",
           "isDriver": false,
-          "questions": [{ "textAr": "بشكل عام أشعر بالرضا عن عملي هذا الأسبوع", "textEn": "Overall I feel satisfied with my work this week", "isOverall": true }]
+          "questions": [{ "textAr": "بشكل عام أنا راضٍ عن عملي هذه الفترة", "textEn": "Overall I am satisfied with my work this period", "isOverall": true }]
         }
       ]
     }

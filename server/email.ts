@@ -29,6 +29,14 @@ export function createEmailProvider(): EmailProvider {
   return new ConsoleEmailProvider();
 }
 
+/** Composes the patient experience (PREMs) survey invitation email — mirrors composeInvitationMessage in sms.ts. */
+export function composeInvitationEmail(templateNameAr: string, templateNameEn: string, surveyUrl: string, language: 'ar' | 'en'): { subject: string; body: string } {
+  if (language === 'en') {
+    return { subject: `${templateNameEn} — please share your feedback`, body: `${templateNameEn}: please share your feedback — ${surveyUrl}` };
+  }
+  return { subject: `${templateNameAr} — نرجو مشاركتنا رأيك`, body: `${templateNameAr}: نرجو مشاركتنا رأيك — ${surveyUrl}` };
+}
+
 /** Composes the anonymous employee experience/engagement survey invitation email. */
 export function composeEmployeeSurveyEmail(
   instrumentNameAr: string,

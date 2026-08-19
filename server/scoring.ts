@@ -60,6 +60,35 @@ export function scoreNps(values: number[]): { n: number; score: number | null } 
   return { n, score: round2(score) };
 }
 
+/**
+ * % of answers rating 4 or 5 on a 1-5 Likert scale ("agree"/"strongly agree") — the top-2-box
+ * convention used by this platform's employee engagement instrument (matches the hospital's own
+ * existing "معدل المشاركة" methodology), distinct from PREMs' stricter top-box (=5 only, HCAHPS
+ * convention) used by scoreDomain above.
+ */
+export function scoreAgreePercent(values: number[]): { n: number; mean: number | null; agreePercent: number | null } {
+  const clean = values.filter((v) => Number.isFinite(v));
+  const n = clean.length;
+  if (n === 0) return { n: 0, mean: null, agreePercent: null };
+  const mean = round2(clean.reduce((sum, v) => sum + v, 0) / n);
+  const agreeCount = clean.filter((v) => v >= 4).length;
+  return { n, mean, agreePercent: round2((agreeCount / n) * 100) };
+}
+
+/**
+ * Saudi MOH KPI 5.1.1 definition of eNPS: the percentage of respondents scoring 9-10 on the
+ * 0-10 recommendation question ("% promoters"), NOT the classic promoters-minus-detractors NPS
+ * formula used by scoreNps above — the two are deliberately different metrics.
+ */
+export function scorePromoterPercent(values: number[]): { n: number; mean: number | null; promoterPercent: number | null } {
+  const clean = values.filter((v) => Number.isFinite(v));
+  const n = clean.length;
+  if (n === 0) return { n: 0, mean: null, promoterPercent: null };
+  const mean = round2(clean.reduce((sum, v) => sum + v, 0) / n);
+  const promoterCount = clean.filter((v) => v >= 9).length;
+  return { n, mean, promoterPercent: round2((promoterCount / n) * 100) };
+}
+
 /** % of respondents who answered "yes" (1) to a gate/yes-no question. */
 export function scoreYesNo(values: number[]): { n: number; yesPercent: number | null } {
   const clean = values.filter((v) => Number.isFinite(v));

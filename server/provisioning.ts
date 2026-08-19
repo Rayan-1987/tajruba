@@ -65,6 +65,10 @@ interface EmployeeQuestionSeed {
   textAr: string;
   textEn: string;
   isOverall?: boolean;
+  // Defaults to 'likert5'. 'nps' (0-10 recommendation score) and 'text' (open feedback) live in
+  // their own single-purpose, non-driver domains so they never get pooled with 1-5 answers when
+  // computing a domain's agree-percent (see /employee-experience/dashboard in api.ts).
+  answerType?: AnswerType;
 }
 
 interface EmployeeDomainSeed {
@@ -348,7 +352,7 @@ export function provisionTenantDefaults(db: Db, root: string, tenantId: string):
           domainId,
           question.textAr,
           question.textEn,
-          'likert5',
+          question.answerType ?? 'likert5',
           question.isOverall ? 1 : 0,
           index
         );

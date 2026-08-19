@@ -126,11 +126,11 @@ test('employee experience: default instruments are seeded, submission is anonymo
 
     const dashboardFull = (await (
       await fetch(`${baseUrl}/api/employee-experience/dashboard?instrumentId=${annual!.id}`, { headers: { cookie: adminCookie } })
-    ).json()) as { suppressed: boolean; n: number; staffSatisfactionScore: number | null; engagementScore: number | null };
+    ).json()) as { suppressed: boolean; n: number; participationRate: number | null; enps: number | null };
     assert.equal(dashboardFull.suppressed, false);
     assert.equal(dashboardFull.n, 5);
-    assert.ok(dashboardFull.staffSatisfactionScore !== null);
-    assert.ok(dashboardFull.engagementScore !== null);
+    assert.ok(dashboardFull.participationRate !== null);
+    assert.ok(dashboardFull.enps !== null);
 
     // Improvement plan CRUD.
     const planRes = await fetch(`${baseUrl}/api/employee-experience/improvement-plans`, {

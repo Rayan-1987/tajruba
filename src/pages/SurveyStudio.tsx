@@ -35,7 +35,7 @@ export default function SurveyStudio() {
 
   const [templateId, setTemplateId] = useState('');
   const [departmentId, setDepartmentId] = useState('');
-  const [channel, setChannel] = useState<'sms' | 'whatsapp' | 'phone'>('sms');
+  const [channel, setChannel] = useState<'sms' | 'whatsapp' | 'phone' | 'email'>('sms');
   const [phones, setPhones] = useState('');
   const [providerName, setProviderName] = useState('');
   const [result, setResult] = useState<string | null>(null);
@@ -50,9 +50,9 @@ export default function SurveyStudio() {
       .split('\n')
       .map((p) => p.trim())
       .filter(Boolean)
-      .map((phone) => ({ phone }));
+      .map((value) => (channel === 'email' ? { email: value } : { phone: value }));
     if (!templateId || !departmentId || rows.length === 0) {
-      setResult('يرجى اختيار القالب والقسم وإدخال أرقام جوال.');
+      setResult(channel === 'email' ? 'يرجى اختيار القالب والقسم وإدخال عناوين بريد إلكتروني.' : 'يرجى اختيار القالب والقسم وإدخال أرقام جوال.');
       return;
     }
     const res = await api.post<{ created: number }>('/invitations/bulk', {
@@ -96,6 +96,7 @@ export default function SurveyStudio() {
             <option value="sms">SMS</option>
             <option value="whatsapp">واتساب</option>
             <option value="phone">اتصال هاتفي</option>
+            <option value="email">بريد إلكتروني</option>
           </select>
           <input
             value={providerName}
@@ -108,7 +109,9 @@ export default function SurveyStudio() {
           value={phones}
           onChange={(e) => setPhones(e.target.value)}
           rows={4}
-          placeholder={'رقم جوال في كل سطر\n0501234567\n0559876543'}
+          placeholder={
+            channel === 'email' ? 'بريد إلكتروني في كل سطر\npatient1@example.com\npatient2@example.com' : 'رقم جوال في كل سطر\n0501234567\n0559876543'
+          }
           className="mt-3 w-full rounded-lg border border-slate-300 p-2 text-sm"
         />
         <button type="button" onClick={submitInvitations} className="mt-3 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">

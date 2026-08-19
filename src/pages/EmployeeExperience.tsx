@@ -17,16 +17,17 @@ interface DomainScore {
   nameEn: string;
   isDriver: boolean;
   n: number;
-  topBoxPercent: number | null;
-  confidenceTier: string;
+  mean: number | null;
+  agreePercent: number | null;
 }
 
 interface DashboardResponse {
   n: number;
   suppressed: boolean;
   minGroupSize?: number;
-  staffSatisfactionScore: number | null;
-  engagementScore: number | null;
+  participationRate: number | null;
+  enps: number | null;
+  avgRecommendation: number | null;
   domains: DomainScore[];
   departmentBreakdown?: { departmentId: string | null; departmentNameAr: string | null; n: number; suppressed: boolean }[];
 }
@@ -166,12 +167,13 @@ export default function EmployeeExperience() {
         <>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div className="rounded-2xl bg-white p-5 shadow-sm">
-              <p className="text-xs text-slate-500">درجة رضا الموظفين</p>
-              <p className="mt-1 text-3xl font-bold text-emerald-600">{dashboard.staffSatisfactionScore ?? '—'}%</p>
+              <p className="text-xs text-slate-500">معدل المشاركة (موافق/موافق بشدة)</p>
+              <p className="mt-1 text-3xl font-bold text-emerald-600">{dashboard.participationRate ?? '—'}%</p>
             </div>
             <div className="rounded-2xl bg-white p-5 shadow-sm">
-              <p className="text-xs text-slate-500">درجة الارتباط الوظيفي</p>
-              <p className="mt-1 text-3xl font-bold text-emerald-600">{dashboard.engagementScore ?? '—'}%</p>
+              <p className="text-xs text-slate-500">مؤشر التوصية eNPS (نسبة 9–10)</p>
+              <p className="mt-1 text-3xl font-bold text-emerald-600">{dashboard.enps ?? '—'}%</p>
+              {dashboard.avgRecommendation !== null && <p className="mt-0.5 text-xs text-slate-400">متوسط الدرجة: {dashboard.avgRecommendation}/10</p>}
             </div>
             <div className="rounded-2xl bg-white p-5 shadow-sm">
               <p className="text-xs text-slate-500">عدد المستجيبين</p>
@@ -187,7 +189,9 @@ export default function EmployeeExperience() {
                   <span className="text-slate-700">
                     {d.nameAr} {!d.isDriver && <span className="text-xs text-slate-400">(مؤشر عام)</span>}
                   </span>
-                  <span className="font-semibold text-slate-800">{d.topBoxPercent ?? '—'}%</span>
+                  <span className="font-semibold text-slate-800">
+                    {d.agreePercent ?? '—'}% <span className="font-normal text-slate-400">({d.mean ?? '—'}/5)</span>
+                  </span>
                 </div>
               ))}
             </div>
