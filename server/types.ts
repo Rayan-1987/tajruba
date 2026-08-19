@@ -37,6 +37,15 @@ export type AnswerType = 'likert5' | 'nps' | 'yesno' | 'text' | 'vas';
 
 export type InvitationChannel = 'sms' | 'whatsapp' | 'phone' | 'email';
 
+// Case-mix adjustment covariate (RFP BMK-04). Age band is the single covariate implemented here
+// — it mirrors the real HCAHPS case-mix adjustment methodology, which uses patient age (among a
+// few other factors) to make fair comparisons between units serving different patient
+// populations. Optional and only captured where a staff member plausibly knows it at invite
+// time (bulk upload, phone survey, HIS webhook) — anonymous walk-up channels (QR/kiosk) never
+// collect it, so case-mix adjustment silently has less data to work with there, not an error.
+export type AgeBand = '<18' | '18-40' | '41-65' | '65+';
+export const AGE_BANDS: AgeBand[] = ['<18', '18-40', '41-65', '65+'];
+
 export type InvitationStatus = 'pending' | 'sent' | 'opened' | 'completed' | 'expired';
 
 export type CommentSentiment = 'positive' | 'negative' | 'neutral' | 'mixed';

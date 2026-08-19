@@ -47,7 +47,7 @@ import { decryptPii, encryptPii } from './crypto.ts';
 import { sendCsv, sendXlsx, type ExportCell } from './export.ts';
 import { defaultBackupDir, listBackups, runBackup } from './backup.ts';
 import { buildEnrollmentQrCode, consumeRecoveryCode, createMfaSecret, generateRecoveryCodes, verifyMfaToken } from './mfa.ts';
-import type { AnswerType, RecoveryStatus, Role, ServiceType } from './types.ts';
+import { AGE_BANDS, type AgeBand, type AnswerType, type RecoveryStatus, type Role, type ServiceType } from './types.ts';
 
 function uid(): string {
   return randomUUID();
@@ -2134,6 +2134,66 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
   // matching external reports' Units Breakdown + Variance Analysis quadrant view. A
   // DepartmentManager never sees other departments anywhere else in the app, so this
   // cross-department comparison is restricted to roles that already have that visibility.
+  // Case-mix adjustment (RFP BMK-04) via indirect standardization on patient age band — the
+  // same technique HCAHPS itself uses (among other covariates) to compare units fairly when
+  // they serve different patient populations. Age band is the one covariate this platform
+  // captures (see AgeBand in types.ts); departments/periods with no age-band data on file simply
+  // get no adjusted figure rather than a misleading one.
+  function ageBandTopBoxRates(
+    tenantId: string,
+    questionId: string,
+    deptId: string | undefined,
+    dateFrom: string,
+    dateTo: string
+  ): Map<string, { n: number; topBoxRate: number }> {
+    let sql = `SELECT si.patient_age_band as band, COUNT(*) as n, AVG(CASE WHEN a.value_numeric >= 5 THEN 1.0 ELSE 0.0 END) as rate
+               FROM answers a
+               JOIN survey_responses r ON r.id = a.response_id
+               JOIN survey_invitations si ON si.id = r.invitation_id
+               WHERE a.question_id = ? AND r.tenant_id = ? AND si.patient_age_band IS NOT NULL
+                     AND r.submitted_at >= ? AND r.submitted_at < ?`;
+    const params: string[] = [questionId, tenantId, dateFrom, dateTo];
+    if (deptId) {
+      sql += ' AND si.department_id = ?';
+      params.push(deptId);
+    }
+    sql += ' GROUP BY si.patient_age_band';
+    const rows = db.prepare(sql).all(...params) as { band: string; n: number; rate: number }[];
+    return new Map(rows.map((r) => [r.band, { n: r.n, topBoxRate: r.rate }]));
+  }
+
+  /**
+   * Expected Top-Box rate for this department if it had the org's overall age-band-specific
+   * rates but its OWN age-band mix (indirect standardization), then the department's raw rate
+   * is scaled by (org overall rate / expected rate) to produce a mix-adjusted figure comparable
+   * across departments regardless of who they happen to serve. Returns null when there isn't
+   * enough age-band data on file to standardize against (no adjustment silently applied).
+   */
+  function caseMixAdjustedTopBoxPercent(
+    tenantId: string,
+    questionId: string,
+    deptId: string,
+    dateFrom: string,
+    dateTo: string,
+    orgRates: Map<string, { n: number; topBoxRate: number }>,
+    orgOverallRate: number | null
+  ): number | null {
+    if (orgOverallRate == null) return null;
+    const deptRates = ageBandTopBoxRates(tenantId, questionId, deptId, dateFrom, dateTo);
+    const deptTotalN = [...deptRates.values()].reduce((sum, v) => sum + v.n, 0);
+    if (deptTotalN === 0) return null;
+    let expectedSum = 0;
+    for (const [band, deptStat] of deptRates) {
+      const orgStat = orgRates.get(band);
+      if (orgStat) expectedSum += deptStat.n * orgStat.topBoxRate;
+    }
+    const expectedRate = expectedSum / deptTotalN;
+    if (expectedRate <= 0) return null;
+    const observedRate = [...deptRates.values()].reduce((sum, v) => sum + v.n * v.topBoxRate, 0) / deptTotalN;
+    const adjustedRate = observedRate * (orgOverallRate / expectedRate);
+    return round2(Math.min(100, Math.max(0, adjustedRate * 100)));
+  }
+
   router.get('/reports/departments-breakdown', (req: Request, res: Response) => {
     const serviceType = req.query.serviceType as ServiceType | undefined;
     if (!serviceType) {
@@ -2165,6 +2225,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     const windows = rollingWindows();
     const orgCurrentValues = fetchQuestionValues(req.user!.tenantId, criterionQuestion.id, undefined, windows.curFrom, windows.curTo);
     const orgAvg = primaryMetric('likert5', orgCurrentValues);
+    const orgAgeBandRates = ageBandTopBoxRates(req.user!.tenantId, criterionQuestion.id, undefined, windows.curFrom, windows.curTo);
+    const orgOverallRate = orgAvg == null ? null : orgAvg / 100;
     const monthExpr = TREND_PERIOD_EXPR.month;
 
     const results = departments.map((dept) => {
@@ -2174,6 +2236,15 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       const prevMetric = primaryMetric('likert5', prevValues);
       const change = curMetric != null && prevMetric != null ? round2(curMetric - prevMetric) : null;
       const deviation = curMetric != null && orgAvg != null ? round2(curMetric - orgAvg) : null;
+      const caseMixAdjusted = caseMixAdjustedTopBoxPercent(
+        req.user!.tenantId,
+        criterionQuestion.id,
+        dept.id,
+        windows.curFrom,
+        windows.curTo,
+        orgAgeBandRates,
+        orgOverallRate
+      );
 
       const sparkRows = db
         .prepare(
@@ -2196,6 +2267,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         previousTopBoxPercent: prevMetric,
         changeVsPreviousPeriod: change,
         deviationVsOrgAverage: deviation,
+        caseMixAdjustedTopBoxPercent: caseMixAdjusted,
         trend
       };
     });
@@ -2235,7 +2307,16 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
           .get(overallDomain.id) as { id: string } | undefined)
       : undefined;
 
-    const headers = ['القسم', 'عدد الاستجابات', 'نسبة Top-Box الحالية %', 'الفترة السابقة %', 'التغير', 'الانحراف عن متوسط المنشأة', 'الترتيب المئيني الداخلي'];
+    const headers = [
+      'القسم',
+      'عدد الاستجابات',
+      'نسبة Top-Box الحالية %',
+      'الفترة السابقة %',
+      'التغير',
+      'الانحراف عن متوسط المنشأة',
+      'الترتيب المئيني الداخلي',
+      'نسبة معدَّلة حسب الحالة (Case-mix) %'
+    ];
     let rows: ExportCell[][] = [];
     if (criterionQuestion) {
       const departments = db
@@ -2244,19 +2325,31 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       const windows = rollingWindows();
       const orgCurrentValues = fetchQuestionValues(req.user!.tenantId, criterionQuestion.id, undefined, windows.curFrom, windows.curTo);
       const orgAvg = primaryMetric('likert5', orgCurrentValues);
+      const orgAgeBandRates = ageBandTopBoxRates(req.user!.tenantId, criterionQuestion.id, undefined, windows.curFrom, windows.curTo);
+      const orgOverallRate = orgAvg == null ? null : orgAvg / 100;
 
       const computed = departments.map((dept) => {
         const curValues = fetchQuestionValues(req.user!.tenantId, criterionQuestion.id, dept.id, windows.curFrom, windows.curTo);
         const prevValues = fetchQuestionValues(req.user!.tenantId, criterionQuestion.id, dept.id, windows.prevFrom, windows.prevTo);
         const curMetric = primaryMetric('likert5', curValues);
         const prevMetric = primaryMetric('likert5', prevValues);
+        const caseMixAdjusted = caseMixAdjustedTopBoxPercent(
+          req.user!.tenantId,
+          criterionQuestion.id,
+          dept.id,
+          windows.curFrom,
+          windows.curTo,
+          orgAgeBandRates,
+          orgOverallRate
+        );
         return {
           nameAr: dept.name_ar,
           n: curValues.length,
           curMetric,
           prevMetric,
           change: curMetric != null && prevMetric != null ? round2(curMetric - prevMetric) : null,
-          deviation: curMetric != null && orgAvg != null ? round2(curMetric - orgAvg) : null
+          deviation: curMetric != null && orgAvg != null ? round2(curMetric - orgAvg) : null,
+          caseMixAdjusted
         };
       });
       const scored = computed.filter((r) => r.curMetric != null);
@@ -2265,7 +2358,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
           r.curMetric == null || scored.length <= 1
             ? null
             : round2((scored.filter((o) => (o.curMetric as number) <= (r.curMetric as number)).length / scored.length) * 100);
-        return [r.nameAr, r.n, r.curMetric, r.prevMetric, r.change, r.deviation, percentile];
+        return [r.nameAr, r.n, r.curMetric, r.prevMetric, r.change, r.deviation, percentile, r.caseMixAdjusted];
       });
     }
 
@@ -2697,7 +2790,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     express.json({ limit: '256kb' }),
     async (req: Request, res: Response) => {
       const { rows, templateId, departmentId, channel, providerName } = req.body as {
-        rows?: { phone?: string; email?: string }[];
+        rows?: { phone?: string; email?: string; ageBand?: AgeBand }[];
         templateId?: string;
         departmentId?: string;
         channel?: 'sms' | 'whatsapp' | 'phone' | 'email';
@@ -2727,8 +2820,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
 
       const insert = db.prepare(
         `INSERT INTO survey_invitations
-         (id, tenant_id, template_id, department_id, service_type, token_hash, patient_phone_hash, channel, status, expires_at, sent_at, provider_name)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, tenant_id, template_id, department_id, service_type, token_hash, patient_phone_hash, channel, status, expires_at, sent_at, provider_name, patient_age_band)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
       const now = new Date().toISOString();
       const expires = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
@@ -2746,6 +2839,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
           skipped += 1;
           continue;
         }
+        if (row.ageBand !== undefined && !AGE_BANDS.includes(row.ageBand)) continue;
         const rawToken = uid();
         let status = 'pending';
         if (effectiveChannel === 'sms' || effectiveChannel === 'whatsapp') {
@@ -2773,7 +2867,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
           status,
           expires,
           now,
-          providerName?.trim() || null
+          providerName?.trim() || null,
+          row.ageBand ?? null
         );
         created += 1;
       }
@@ -2874,9 +2969,14 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         comment?: string;
         contactOptIn?: boolean;
         providerName?: string;
+        ageBand?: AgeBand;
       };
       if (!body.templateId || !body.departmentId || !body.patientPhone || !Array.isArray(body.answers)) {
         res.status(400).json({ error: 'invalid_payload' });
+        return;
+      }
+      if (body.ageBand !== undefined && !AGE_BANDS.includes(body.ageBand)) {
+        res.status(400).json({ error: 'invalid_age_band' });
         return;
       }
       if (req.user!.role === 'DepartmentManager' && body.departmentId !== req.user!.departmentId) {
@@ -2912,8 +3012,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       const invitationId = uid();
       db.prepare(
         `INSERT INTO survey_invitations
-         (id, tenant_id, template_id, department_id, service_type, token_hash, patient_phone_hash, channel, status, expires_at, sent_at, created_at, provider_name)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'phone', 'completed', ?, ?, ?, ?)`
+         (id, tenant_id, template_id, department_id, service_type, token_hash, patient_phone_hash, channel, status, expires_at, sent_at, created_at, provider_name, patient_age_band)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'phone', 'completed', ?, ?, ?, ?, ?)`
       ).run(
         invitationId,
         req.user!.tenantId,
@@ -2925,7 +3025,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         now,
         now,
         now,
-        body.providerName?.trim() || null
+        body.providerName?.trim() || null,
+        body.ageBand ?? null
       );
 
       const responseId = uid();

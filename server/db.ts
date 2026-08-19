@@ -191,7 +191,10 @@ CREATE TABLE IF NOT EXISTS survey_invitations (
   -- Free-text name of the treating clinician/provider, captured at invite time (bulk SMS batch
   -- or phone-survey entry) so comments can be grouped by who provided the care, not just which
   -- department. Optional — kiosk/QR submissions are anonymous walk-ups with no known provider.
-  provider_name TEXT
+  provider_name TEXT,
+  -- Case-mix covariate (RFP BMK-04) — see AgeBand in types.ts. Optional for the same reason as
+  -- provider_name: only known where a staff member captured it at invite time.
+  patient_age_band TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_invitations_tenant ON survey_invitations(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_invitations_token ON survey_invitations(token_hash);

@@ -101,6 +101,7 @@ interface DepartmentBreakdown {
   changeVsPreviousPeriod: number | null;
   deviationVsOrgAverage: number | null;
   percentileRank: number | null;
+  caseMixAdjustedTopBoxPercent: number | null;
   trend: { period: string; topBoxPercent: number; n: number }[];
 }
 
@@ -713,6 +714,12 @@ function DepartmentsBreakdownSection({
                 <th className="py-1 pe-2 font-medium" title="الترتيب المئوي بين أقسام هذه الخدمة داخل المنشأة فقط، وليس مقابل بيانات خارجية">
                   الترتيب المئوي الداخلي
                 </th>
+                <th
+                  className="py-1 pe-2 font-medium"
+                  title="نسبة Top-Box بعد تعديلها إحصائيًا حسب التركيبة العمرية للمستجيبين (Case-mix)، لمقارنة عادلة بين أقسام تخدم فئات عمرية مختلفة. تظهر فقط عند توفر بيانات الفئة العمرية."
+                >
+                  معدَّلة (Case-mix)
+                </th>
                 <th className="py-1 font-medium">الاتجاه</th>
               </tr>
             </thead>
@@ -731,6 +738,9 @@ function DepartmentsBreakdownSection({
                     {dept.deviationVsOrgAverage != null ? `${dept.deviationVsOrgAverage >= 0 ? '+' : ''}${dept.deviationVsOrgAverage}` : '-'}
                   </td>
                   <td className="py-1.5 pe-2 text-slate-500">{dept.percentileRank != null ? `%${dept.percentileRank.toFixed(0)}` : '-'}</td>
+                  <td className="py-1.5 pe-2 text-slate-500">
+                    {dept.caseMixAdjustedTopBoxPercent != null ? `${dept.caseMixAdjustedTopBoxPercent.toFixed(0)}%` : '—'}
+                  </td>
                   <td className="py-1.5">
                     <MiniSparkline points={dept.trend.map((t) => t.topBoxPercent)} />
                   </td>

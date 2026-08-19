@@ -3,6 +3,9 @@ import { api } from '../api';
 import { useAuth } from '../AuthContext';
 import type { Department } from '../types';
 
+type AgeBand = '<18' | '18-40' | '41-65' | '65+';
+const AGE_BAND_LABELS: Record<AgeBand, string> = { '<18': 'أقل من 18', '18-40': '18-40', '41-65': '41-65', '65+': '65 فأكثر' };
+
 interface TemplateQuestion {
   id: string;
   code: string;
@@ -27,6 +30,7 @@ export default function PhoneSurvey() {
   const [departmentId, setDepartmentId] = useState(user?.departmentId ?? '');
   const [patientPhone, setPatientPhone] = useState('');
   const [providerName, setProviderName] = useState('');
+  const [ageBand, setAgeBand] = useState<AgeBand | ''>('');
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [comment, setComment] = useState('');
   const [contactOptIn, setContactOptIn] = useState(false);
@@ -55,6 +59,7 @@ export default function PhoneSurvey() {
     setComment('');
     setPatientPhone('');
     setProviderName('');
+    setAgeBand('');
     setContactOptIn(false);
   };
 
@@ -71,6 +76,7 @@ export default function PhoneSurvey() {
         departmentId,
         patientPhone,
         providerName: providerName.trim() || undefined,
+        ageBand: ageBand || undefined,
         answers: Object.entries(answers)
           .filter(([questionId]) => visibleIds.has(questionId))
           .map(([questionId, value]) => ({ questionId, value })),
@@ -126,8 +132,21 @@ export default function PhoneSurvey() {
             value={providerName}
             onChange={(e) => setProviderName(e.target.value)}
             placeholder="مقدّم الخدمة / الطبيب المعالج (اختياري)"
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm md:col-span-3"
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm md:col-span-2"
           />
+          <select
+            value={ageBand}
+            onChange={(e) => setAgeBand(e.target.value as AgeBand | '')}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            title="تُستخدم للمقارنة العادلة بين الأقسام (Case-mix)"
+          >
+            <option value="">الفئة العمرية (اختياري)</option>
+            {(Object.keys(AGE_BAND_LABELS) as AgeBand[]).map((band) => (
+              <option key={band} value={band}>
+                {AGE_BAND_LABELS[band]}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 
