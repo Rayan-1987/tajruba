@@ -9,6 +9,7 @@ const NAV_ITEMS: { to: string; label: string; roles?: Role[]; badgeKey?: 'commen
   { to: '/dashboard/comments', label: 'ذكاء التعليقات', badgeKey: 'comments' },
   { to: '/dashboard/service-recovery', label: 'استعادة الخدمة', badgeKey: 'cases' },
   { to: '/dashboard/proms', label: 'النتائج الصحية (PROMs)' },
+  { to: '/dashboard/employee-experience', label: 'تجربة الموظف', roles: ['SystemAdmin', 'QualityManager', 'ExecutiveViewer', 'DepartmentManager'] },
   { to: '/dashboard/phone-survey', label: 'استبيان هاتفي' },
   { to: '/dashboard/survey-studio', label: 'استوديو الاستبيانات', roles: ['SystemAdmin', 'QualityManager'] },
   { to: '/dashboard/data-center', label: 'مركز البيانات', roles: ['SystemAdmin', 'QualityManager'] },

@@ -29,6 +29,25 @@ export function createEmailProvider(): EmailProvider {
   return new ConsoleEmailProvider();
 }
 
+/** Composes the anonymous employee experience/engagement survey invitation email. */
+export function composeEmployeeSurveyEmail(
+  instrumentNameAr: string,
+  instrumentNameEn: string,
+  surveyUrl: string,
+  language: 'ar' | 'en'
+): { subject: string; body: string } {
+  if (language === 'en') {
+    return {
+      subject: `Your feedback matters — ${instrumentNameEn}`,
+      body: `You're invited to complete "${instrumentNameEn}". Your response is anonymous and cannot be traced back to you. It takes a few minutes: ${surveyUrl}`
+    };
+  }
+  return {
+    subject: `رأيك يهمنا — ${instrumentNameAr}`,
+    body: `أنت مدعو لتعبئة "${instrumentNameAr}". إجابتك مجهولة تمامًا ولا يمكن ربطها بك، وتستغرق دقائق قليلة: ${surveyUrl}`
+  };
+}
+
 /** Composes the password-reset email sent to a staff account. */
 export function composePasswordResetEmail(resetUrl: string, language: 'ar' | 'en'): { subject: string; body: string } {
   if (language === 'en') {

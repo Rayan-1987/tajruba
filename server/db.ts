@@ -406,6 +406,119 @@ CREATE TABLE IF NOT EXISTS prom_scores (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_scores_assignment ON prom_scores(assignment_id);
+
+-- Employee Experience & Engagement module (RFP OPT-03): a parallel measurement track to PREMs
+-- above, using the same domain/question/scoring shape but strictly anonymous at the response
+-- level so small-group results can never be traced back to an individual employee.
+CREATE TABLE IF NOT EXISTS employee_survey_instruments (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  code TEXT NOT NULL,
+  name_ar TEXT NOT NULL,
+  name_en TEXT NOT NULL,
+  -- 'annual' = comprehensive yearly instrument; 'pulse' = short recurring check-in
+  kind TEXT NOT NULL DEFAULT 'annual',
+  active INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(tenant_id, code)
+);
+CREATE INDEX IF NOT EXISTS idx_emp_instruments_tenant ON employee_survey_instruments(tenant_id);
+
+CREATE TABLE IF NOT EXISTS employee_survey_domains (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  instrument_id TEXT NOT NULL REFERENCES employee_survey_instruments(id) ON DELETE CASCADE,
+  code TEXT NOT NULL,
+  name_ar TEXT NOT NULL,
+  name_en TEXT NOT NULL,
+  -- Whether this domain's composite score feeds the driver/correlation analysis against the
+  -- instrument's overall engagement item (see /employee-experience/driver-analysis in api.ts).
+  is_driver INTEGER NOT NULL DEFAULT 1,
+  active INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_emp_domains_instrument ON employee_survey_domains(instrument_id);
+
+CREATE TABLE IF NOT EXISTS employee_survey_questions (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  domain_id TEXT NOT NULL REFERENCES employee_survey_domains(id) ON DELETE CASCADE,
+  text_ar TEXT NOT NULL,
+  text_en TEXT NOT NULL,
+  answer_type TEXT NOT NULL DEFAULT 'likert5',
+  -- The single item per instrument treated as the overall engagement/eNPS anchor (e.g. "أنصح
+  -- بهذه الجهة كمكان عمل جيد") — mirrors how an Overall Assessment question anchors PREMs
+  -- driver analysis.
+  is_overall INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_emp_questions_domain ON employee_survey_questions(domain_id);
+
+-- A minimal roster used only for targeting which cohort gets invited — never linked to a
+-- submitted response (see employee_survey_responses).
+CREATE TABLE IF NOT EXISTS employees (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  job_category TEXT NOT NULL,
+  contact_channel TEXT NOT NULL DEFAULT 'email',
+  contact_value_encrypted TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_employees_tenant ON employees(tenant_id);
+
+CREATE TABLE IF NOT EXISTS employee_survey_invitations (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  instrument_id TEXT NOT NULL REFERENCES employee_survey_instruments(id) ON DELETE CASCADE,
+  employee_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
+  -- Snapshotted at send time so a later roster change (employee moves department) never
+  -- silently rewrites which cohort a past response counts toward.
+  department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  job_category TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'pending',
+  sent_at TEXT,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_emp_invitations_tenant ON employee_survey_invitations(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_emp_invitations_token ON employee_survey_invitations(token_hash);
+
+-- Deliberately carries no employee identifier — OPT-03E requires results never be traceable to
+-- an individual, so a response only carries the department/job-category tags snapshotted from
+-- the invitation, severing the identity link at submission time.
+CREATE TABLE IF NOT EXISTS employee_survey_responses (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  instrument_id TEXT NOT NULL REFERENCES employee_survey_instruments(id) ON DELETE CASCADE,
+  department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  job_category TEXT NOT NULL,
+  submitted_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_emp_responses_tenant ON employee_survey_responses(tenant_id);
+
+CREATE TABLE IF NOT EXISTS employee_survey_answers (
+  id TEXT PRIMARY KEY,
+  response_id TEXT NOT NULL REFERENCES employee_survey_responses(id) ON DELETE CASCADE,
+  question_id TEXT NOT NULL REFERENCES employee_survey_questions(id) ON DELETE CASCADE,
+  value_numeric REAL,
+  value_text TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_emp_answers_response ON employee_survey_answers(response_id);
+
+CREATE TABLE IF NOT EXISTS employee_improvement_plans (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  domain_id TEXT REFERENCES employee_survey_domains(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  due_date TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_emp_plans_tenant ON employee_improvement_plans(tenant_id);
 `;
 
 export function openDatabase(databasePath: string): Db {

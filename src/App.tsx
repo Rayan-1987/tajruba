@@ -8,6 +8,7 @@ import Register from './pages/Register';
 import TermsOfService from './pages/TermsOfService';
 import DataProcessingAgreement from './pages/DataProcessingAgreement';
 import PatientSurvey from './pages/PatientSurvey';
+import EmployeeSurvey from './pages/EmployeeSurvey';
 import KioskSurvey from './pages/KioskSurvey';
 import PatientPromsForm from './pages/PatientPromsForm';
 import PatientPromsOptOut from './pages/PatientPromsOptOut';
@@ -23,6 +24,7 @@ import DataCenter from './pages/DataCenter';
 import Settings from './pages/Settings';
 import Security from './pages/Security';
 import Admin from './pages/Admin';
+import EmployeeExperience from './pages/EmployeeExperience';
 
 function ProtectedRoutes({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -69,6 +71,7 @@ export default function App() {
       <Route path="/terms" element={<TermsOfService />} />
       <Route path="/data-processing-agreement" element={<DataProcessingAgreement />} />
       <Route path="/s/:token" element={<PatientSurvey />} />
+      <Route path="/e/:token" element={<EmployeeSurvey />} />
       <Route path="/k/:code" element={<KioskSurvey />} />
       <Route path="/p/:token" element={<PatientPromsForm />} />
       <Route path="/p/:token/opt-out" element={<PatientPromsOptOut />} />
@@ -93,6 +96,7 @@ export default function App() {
         <Route path="comments" element={<CommentsIntelligence />} />
         <Route path="service-recovery" element={<ServiceRecovery />} />
         <Route path="proms" element={<PromsMonitor />} />
+        <Route path="employee-experience" element={<EmployeeExperience />} />
         <Route path="phone-survey" element={<PhoneSurvey />} />
         <Route path="security" element={<Security />} />
         <Route

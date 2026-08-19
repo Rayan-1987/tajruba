@@ -32,6 +32,7 @@ import {
 } from './scoring.ts';
 import { DEFAULT_DEPARTMENTS, provisionTenantDefaults } from './provisioning.ts';
 import {
+  composeEmployeeSurveyMessage,
   composeInvitationMessage,
   composePromsMessage,
   composePromsReminderMessage,
@@ -39,7 +40,7 @@ import {
   createSmsProvider,
   type TenantSmsConfig
 } from './sms.ts';
-import { composePasswordResetEmail, createEmailProvider } from './email.ts';
+import { composeEmployeeSurveyEmail, composePasswordResetEmail, createEmailProvider } from './email.ts';
 import { decryptPii, encryptPii } from './crypto.ts';
 import { buildEnrollmentQrCode, consumeRecoveryCode, createMfaSecret, generateRecoveryCodes, verifyMfaToken } from './mfa.ts';
 import type { AnswerType, RecoveryStatus, Role, ServiceType } from './types.ts';
@@ -136,6 +137,12 @@ function maskSecret(value: string | null): string | null {
 // invite the same patient twice within 90 days of their last invitation (avoids survey fatigue
 // and duplicate-response bias, matching common CAHPS-program sampling frame practice).
 const INVITATION_COOLDOWN_DAYS = 90;
+
+// Employee experience/engagement confidentiality floor (RFP OPT-03E): a department/job-category
+// breakdown with fewer respondents than this is suppressed rather than shown, since a small
+// enough group can make individual answers identifiable even without a stored employee link.
+const MIN_GROUP_SIZE_FOR_REPORTING = 5;
+const EMPLOYEE_SURVEY_LINK_VALID_DAYS = 21;
 
 function isEligibleForInvitation(db: Db, tenantId: string, phoneHash: string): { eligible: boolean; reason?: 'dnc' | 'cooldown' } {
   const onDncList = db
@@ -1211,6 +1218,120 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       assignment.episode_id
     );
     res.json({ ok: true });
+  });
+
+  // -------------------------------------------------------------------------
+  // Public employee experience/engagement survey (token is the identity; no auth, no
+  // employee-identifying data ever accepted from this endpoint — see employee_survey_responses).
+  // -------------------------------------------------------------------------
+  router.get('/public/employee-survey/:token', (req: Request, res: Response) => {
+    const invitation = db
+      .prepare(
+        `SELECT ei.id, ei.status, ei.expires_at, ei.instrument_id, esi.name_ar as instrument_name_ar,
+                esi.name_en as instrument_name_en, esi.tenant_id
+         FROM employee_survey_invitations ei
+         JOIN employee_survey_instruments esi ON esi.id = ei.instrument_id
+         WHERE ei.token_hash = ?`
+      )
+      .get(sha256(req.params.token)) as
+      | { id: string; status: string; expires_at: string; instrument_id: string; instrument_name_ar: string; instrument_name_en: string; tenant_id: string }
+      | undefined;
+    if (!invitation) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    if (invitation.status === 'completed') {
+      res.status(410).json({ error: 'already_completed' });
+      return;
+    }
+    if (new Date(invitation.expires_at).getTime() < Date.now()) {
+      res.status(410).json({ error: 'expired' });
+      return;
+    }
+    const domains = db
+      .prepare('SELECT id, name_ar, name_en FROM employee_survey_domains WHERE instrument_id = ?')
+      .all(invitation.instrument_id) as { id: string; name_ar: string; name_en: string }[];
+    const questions = db
+      .prepare(
+        `SELECT id, domain_id, text_ar, text_en, answer_type, sort_order FROM employee_survey_questions
+         WHERE domain_id IN (SELECT id FROM employee_survey_domains WHERE instrument_id = ?) AND active = 1
+         ORDER BY sort_order`
+      )
+      .all(invitation.instrument_id) as { id: string; domain_id: string; text_ar: string; text_en: string; answer_type: string; sort_order: number }[];
+    res.json({
+      instrumentNameAr: invitation.instrument_name_ar,
+      instrumentNameEn: invitation.instrument_name_en,
+      defaultLanguage: getTenantSmsConfig(db, invitation.tenant_id).defaultLanguage,
+      domains: domains.map((d) => ({
+        id: d.id,
+        nameAr: d.name_ar,
+        nameEn: d.name_en,
+        questions: questions
+          .filter((q) => q.domain_id === d.id)
+          .map((q) => ({ id: q.id, textAr: q.text_ar, textEn: q.text_en, answerType: q.answer_type }))
+      }))
+    });
+  });
+
+  router.post('/public/employee-survey/:token/submit', publicSubmitLimiter, express.json({ limit: '16kb' }), (req: Request, res: Response) => {
+    const tokenHash = sha256(req.params.token);
+    const invitation = db
+      .prepare(
+        `SELECT ei.id, ei.status, ei.expires_at, ei.instrument_id, ei.department_id, ei.job_category, esi.tenant_id
+         FROM employee_survey_invitations ei
+         JOIN employee_survey_instruments esi ON esi.id = ei.instrument_id
+         WHERE ei.token_hash = ?`
+      )
+      .get(tokenHash) as
+      | { id: string; status: string; expires_at: string; instrument_id: string; department_id: string | null; job_category: string; tenant_id: string }
+      | undefined;
+    if (!invitation) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    if (invitation.status === 'completed') {
+      res.status(410).json({ error: 'already_completed' });
+      return;
+    }
+    if (new Date(invitation.expires_at).getTime() < Date.now()) {
+      res.status(410).json({ error: 'expired' });
+      return;
+    }
+    const validQuestions = db
+      .prepare(
+        `SELECT id FROM employee_survey_questions
+         WHERE domain_id IN (SELECT id FROM employee_survey_domains WHERE instrument_id = ?) AND active = 1`
+      )
+      .all(invitation.instrument_id) as { id: string }[];
+    const validQuestionIds = new Set(validQuestions.map((q) => q.id));
+
+    const body = req.body as { answers?: { questionId: string; value: number }[] };
+    if (!Array.isArray(body.answers) || body.answers.length === 0) {
+      res.status(400).json({ error: 'invalid_answers' });
+      return;
+    }
+    const clean = body.answers.filter(
+      (a) => validQuestionIds.has(a.questionId) && typeof a.value === 'number' && Number.isFinite(a.value)
+    );
+    if (clean.length < validQuestionIds.size) {
+      res.status(400).json({ error: 'incomplete_answers' });
+      return;
+    }
+
+    // Deliberately no employee_id / invitation_id stored on the response — see
+    // employee_survey_responses in db.ts. Only the department/job-category tags snapshotted
+    // on the invitation carry over, severing the identity link at submission time.
+    const responseId = uid();
+    db.prepare(
+      'INSERT INTO employee_survey_responses (id, tenant_id, instrument_id, department_id, job_category, submitted_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(responseId, invitation.tenant_id, invitation.instrument_id, invitation.department_id, invitation.job_category, new Date().toISOString());
+    const insertAnswer = db.prepare('INSERT INTO employee_survey_answers (id, response_id, question_id, value_numeric) VALUES (?, ?, ?, ?)');
+    for (const answer of clean) {
+      insertAnswer.run(uid(), responseId, answer.questionId, answer.value);
+    }
+    db.prepare("UPDATE employee_survey_invitations SET status = 'completed' WHERE id = ?").run(invitation.id);
+
+    res.status(201).json({ ok: true });
   });
 
   router.use(requireAuth);
@@ -3335,6 +3456,355 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     logAudit(db, req.user!.tenantId, req.user!.id, 'dnc_entry_removed', 'do_not_contact_list', req.params.id, null);
     res.json({ ok: true });
   });
+
+  // -------------------------------------------------------------------------
+  // Employee Experience & Engagement (RFP OPT-03) — parallel to the PREMs module above, but
+  // access is restricted to SystemAdmin/QualityManager since roster contact info and even
+  // small-group scores are HR-sensitive, not general operational reporting.
+  // -------------------------------------------------------------------------
+  router.get('/employee-experience/instruments', requireRole('SystemAdmin', 'QualityManager', 'ExecutiveViewer'), (req: Request, res: Response) => {
+    const rows = db
+      .prepare('SELECT id, code, name_ar, name_en, kind, active FROM employee_survey_instruments WHERE tenant_id = ? ORDER BY kind, name_ar')
+      .all(req.user!.tenantId);
+    res.json({ instruments: rows });
+  });
+
+  router.get(
+    '/employee-experience/instruments/:id/structure',
+    requireRole('SystemAdmin', 'QualityManager'),
+    (req: Request, res: Response) => {
+      const instrument = db
+        .prepare('SELECT id, name_ar, name_en FROM employee_survey_instruments WHERE id = ? AND tenant_id = ?')
+        .get(req.params.id, req.user!.tenantId) as { id: string; name_ar: string; name_en: string } | undefined;
+      if (!instrument) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      const domains = db
+        .prepare('SELECT id, code, name_ar, name_en, is_driver, active FROM employee_survey_domains WHERE instrument_id = ?')
+        .all(instrument.id) as { id: string; code: string; name_ar: string; name_en: string; is_driver: number; active: number }[];
+      const questions = db
+        .prepare(
+          `SELECT id, domain_id, text_ar, text_en, answer_type, is_overall, active, sort_order FROM employee_survey_questions
+           WHERE domain_id IN (SELECT id FROM employee_survey_domains WHERE instrument_id = ?) ORDER BY sort_order`
+        )
+        .all(instrument.id) as {
+        id: string;
+        domain_id: string;
+        text_ar: string;
+        text_en: string;
+        answer_type: string;
+        is_overall: number;
+        active: number;
+        sort_order: number;
+      }[];
+      res.json({
+        instrument,
+        domains: domains.map((d) => ({ ...d, questions: questions.filter((q) => q.domain_id === d.id) }))
+      });
+    }
+  );
+
+  // Minimal roster used only to target invitation cohorts — never joined to a submitted
+  // response. Contact info is encrypted at rest (server/crypto.ts) and never returned in full.
+  router.get('/employee-experience/employees', requireRole('SystemAdmin', 'QualityManager'), (req: Request, res: Response) => {
+    const rows = db
+      .prepare(
+        `SELECT e.id, e.job_category, e.contact_channel, e.active, e.department_id, d.name_ar as department_name_ar
+         FROM employees e LEFT JOIN departments d ON d.id = e.department_id
+         WHERE e.tenant_id = ? ORDER BY e.created_at DESC`
+      )
+      .all(req.user!.tenantId);
+    res.json({ employees: rows });
+  });
+
+  router.post('/employee-experience/employees', requireRole('SystemAdmin'), express.json({ limit: '8kb' }), (req: Request, res: Response) => {
+    const body = req.body as { departmentId?: string; jobCategory?: string; contactChannel?: 'email' | 'sms'; contactValue?: string };
+    if (!body.jobCategory || !body.contactValue || !body.contactChannel) {
+      res.status(400).json({ error: 'invalid_payload' });
+      return;
+    }
+    const id = uid();
+    db.prepare(
+      'INSERT INTO employees (id, tenant_id, department_id, job_category, contact_channel, contact_value_encrypted) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(id, req.user!.tenantId, body.departmentId ?? null, body.jobCategory, body.contactChannel, encryptPii(body.contactValue));
+    logAudit(db, req.user!.tenantId, req.user!.id, 'employee_added', 'employees', id, { jobCategory: body.jobCategory });
+    res.status(201).json({ id });
+  });
+
+  router.delete('/employee-experience/employees/:id', requireRole('SystemAdmin'), (req: Request, res: Response) => {
+    db.prepare('UPDATE employees SET active = 0 WHERE id = ? AND tenant_id = ?').run(req.params.id, req.user!.tenantId);
+    logAudit(db, req.user!.tenantId, req.user!.id, 'employee_deactivated', 'employees', req.params.id, null);
+    res.json({ ok: true });
+  });
+
+  // Bulk-invites every active employee matching the given cohort filters. Anonymous by design:
+  // the invitation snapshots department/job-category for later reporting, but the response
+  // itself (see /public/employee-survey/:token/submit) never carries the employee's identity.
+  router.post(
+    '/employee-experience/invitations',
+    requireRole('SystemAdmin', 'QualityManager'),
+    express.json({ limit: '8kb' }),
+    async (req: Request, res: Response) => {
+      const body = req.body as { instrumentId?: string; departmentId?: string; jobCategory?: string };
+      if (!body.instrumentId) {
+        res.status(400).json({ error: 'instrument_id_required' });
+        return;
+      }
+      const instrument = db
+        .prepare('SELECT id, name_ar, name_en FROM employee_survey_instruments WHERE id = ? AND tenant_id = ?')
+        .get(body.instrumentId, req.user!.tenantId) as { id: string; name_ar: string; name_en: string } | undefined;
+      if (!instrument) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      let sql = 'SELECT id, department_id, job_category, contact_channel, contact_value_encrypted FROM employees WHERE tenant_id = ? AND active = 1';
+      const params: string[] = [req.user!.tenantId];
+      if (body.departmentId) {
+        sql += ' AND department_id = ?';
+        params.push(body.departmentId);
+      }
+      if (body.jobCategory) {
+        sql += ' AND job_category = ?';
+        params.push(body.jobCategory);
+      }
+      const employees = db.prepare(sql).all(...params) as {
+        id: string;
+        department_id: string | null;
+        job_category: string;
+        contact_channel: string;
+        contact_value_encrypted: string | null;
+      }[];
+
+      const smsConfig = getTenantSmsConfig(db, req.user!.tenantId);
+      const smsProvider = createSmsProvider(smsConfig);
+      const emailProvider = createEmailProvider();
+      const baseUrl = `${req.protocol}://${req.get('host')}`;
+      const expiresAt = new Date(Date.now() + EMPLOYEE_SURVEY_LINK_VALID_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+      let sent = 0;
+      for (const employee of employees) {
+        const contactValue = decryptPii(employee.contact_value_encrypted);
+        if (!contactValue) continue;
+        const rawToken = uid().replace(/-/g, '');
+        const invitationId = uid();
+        db.prepare(
+          `INSERT INTO employee_survey_invitations
+           (id, tenant_id, instrument_id, employee_id, department_id, job_category, token_hash, status, sent_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'sent', datetime('now'), ?)`
+        ).run(invitationId, req.user!.tenantId, instrument.id, employee.id, employee.department_id, employee.job_category, sha256(rawToken), expiresAt);
+
+        const surveyUrl = `${baseUrl}/e/${rawToken}`;
+        if (employee.contact_channel === 'sms') {
+          const message = composeEmployeeSurveyMessage(instrument.name_ar, instrument.name_en, surveyUrl, smsConfig.defaultLanguage);
+          await smsProvider.send(contactValue, message);
+        } else {
+          const { subject, body: emailBody } = composeEmployeeSurveyEmail(instrument.name_ar, instrument.name_en, surveyUrl, smsConfig.defaultLanguage);
+          await emailProvider.send(contactValue, subject, emailBody);
+        }
+        sent += 1;
+      }
+      logAudit(db, req.user!.tenantId, req.user!.id, 'employee_survey_invitations_sent', 'employee_survey_invitations', null, {
+        instrumentId: instrument.id,
+        sent
+      });
+      res.status(201).json({ sent });
+    }
+  );
+
+  // Aggregate scores with a hard confidentiality floor: any department whose respondent count
+  // falls below MIN_GROUP_SIZE_FOR_REPORTING is returned as suppressed rather than with figures,
+  // per OPT-03E ("لا يسمح بعرض نتائج الفئات الصغيرة").
+  router.get(
+    '/employee-experience/dashboard',
+    requireRole('SystemAdmin', 'QualityManager', 'ExecutiveViewer', 'DepartmentManager'),
+    (req: Request, res: Response) => {
+      const instrumentId = req.query.instrumentId as string | undefined;
+      if (!instrumentId) {
+        res.status(400).json({ error: 'instrument_id_required' });
+        return;
+      }
+      const effectiveDeptId = req.user!.role === 'DepartmentManager' ? req.user!.departmentId : (req.query.departmentId as string | undefined);
+
+      const answerRows = db
+        .prepare(
+          `SELECT esr.department_id, esd.id as domain_id, esd.name_ar as domain_name_ar, esd.name_en as domain_name_en,
+                  esd.is_driver, esq.is_overall, esa.value_numeric as value
+           FROM employee_survey_answers esa
+           JOIN employee_survey_questions esq ON esq.id = esa.question_id
+           JOIN employee_survey_domains esd ON esd.id = esq.domain_id
+           JOIN employee_survey_responses esr ON esr.id = esa.response_id
+           WHERE esr.tenant_id = ? AND esr.instrument_id = ? ${effectiveDeptId ? 'AND esr.department_id = ?' : ''}`
+        )
+        .all(...[req.user!.tenantId, instrumentId, ...(effectiveDeptId ? [effectiveDeptId] : [])]) as {
+        department_id: string | null;
+        domain_id: string;
+        domain_name_ar: string;
+        domain_name_en: string;
+        is_driver: number;
+        is_overall: number;
+        value: number;
+      }[];
+
+      const respondentCount = db
+        .prepare(
+          `SELECT COUNT(*) as n FROM employee_survey_responses WHERE tenant_id = ? AND instrument_id = ? ${effectiveDeptId ? 'AND department_id = ?' : ''}`
+        )
+        .get(...[req.user!.tenantId, instrumentId, ...(effectiveDeptId ? [effectiveDeptId] : [])]) as { n: number };
+
+      if (respondentCount.n < MIN_GROUP_SIZE_FOR_REPORTING) {
+        res.json({ n: respondentCount.n, suppressed: true, minGroupSize: MIN_GROUP_SIZE_FOR_REPORTING, staffSatisfactionScore: null, engagementScore: null, domains: [] });
+        return;
+      }
+
+      const driverValues = answerRows.filter((r) => r.is_driver === 1).map((r) => r.value);
+      const overallValues = answerRows.filter((r) => r.is_overall === 1).map((r) => r.value);
+      const staffSatisfactionScore = scoreDomain('staff_satisfaction', driverValues, null).topBoxPercent;
+      const engagementScore = scoreDomain('engagement', overallValues, null).topBoxPercent;
+
+      const domainIds = [...new Set(answerRows.map((r) => r.domain_id))];
+      const domains = domainIds.map((domainId) => {
+        const rowsForDomain = answerRows.filter((r) => r.domain_id === domainId);
+        const score = scoreDomain(domainId, rowsForDomain.map((r) => r.value), null);
+        return {
+          nameAr: rowsForDomain[0].domain_name_ar,
+          nameEn: rowsForDomain[0].domain_name_en,
+          isDriver: rowsForDomain[0].is_driver === 1,
+          ...score
+        };
+      });
+
+      // Department breakdown, each group individually suppressed if below the confidentiality floor.
+      const departmentBreakdown = !effectiveDeptId
+        ? (
+            db
+              .prepare(
+                `SELECT esr.department_id, d.name_ar as department_name_ar, COUNT(*) as n
+                 FROM employee_survey_responses esr LEFT JOIN departments d ON d.id = esr.department_id
+                 WHERE esr.tenant_id = ? AND esr.instrument_id = ? GROUP BY esr.department_id`
+              )
+              .all(req.user!.tenantId, instrumentId) as { department_id: string | null; department_name_ar: string | null; n: number }[]
+          ).map((row) => ({
+            departmentId: row.department_id,
+            departmentNameAr: row.department_name_ar,
+            n: row.n,
+            suppressed: row.n < MIN_GROUP_SIZE_FOR_REPORTING
+          }))
+        : [];
+
+      res.json({ n: respondentCount.n, suppressed: false, staffSatisfactionScore, engagementScore, domains, departmentBreakdown });
+    }
+  );
+
+  // Driver analysis: correlates each domain's per-respondent mean with the same respondent's
+  // overall-engagement item — same "high-importance" logic as /reports/priority-index on the
+  // PREMs side, applied to the employee instrument's is_driver domains.
+  router.get(
+    '/employee-experience/driver-analysis',
+    requireRole('SystemAdmin', 'QualityManager', 'ExecutiveViewer'),
+    (req: Request, res: Response) => {
+      const instrumentId = req.query.instrumentId as string | undefined;
+      if (!instrumentId) {
+        res.status(400).json({ error: 'instrument_id_required' });
+        return;
+      }
+      const overallByResponse = db
+        .prepare(
+          `SELECT esr.id as response_id, AVG(esa.value_numeric) as overall_value
+           FROM employee_survey_responses esr
+           JOIN employee_survey_answers esa ON esa.response_id = esr.id
+           JOIN employee_survey_questions esq ON esq.id = esa.question_id
+           WHERE esr.tenant_id = ? AND esr.instrument_id = ? AND esq.is_overall = 1
+           GROUP BY esr.id`
+        )
+        .all(req.user!.tenantId, instrumentId) as { response_id: string; overall_value: number }[];
+      const overallMap = new Map(overallByResponse.map((r) => [r.response_id, r.overall_value]));
+
+      const driverDomains = db
+        .prepare('SELECT id, name_ar, name_en FROM employee_survey_domains WHERE instrument_id = ? AND is_driver = 1')
+        .all(instrumentId) as { id: string; name_ar: string; name_en: string }[];
+
+      const domainMeansByResponse = db
+        .prepare(
+          `SELECT esr.id as response_id, esd.id as domain_id, AVG(esa.value_numeric) as domain_mean
+           FROM employee_survey_responses esr
+           JOIN employee_survey_answers esa ON esa.response_id = esr.id
+           JOIN employee_survey_questions esq ON esq.id = esa.question_id
+           JOIN employee_survey_domains esd ON esd.id = esq.domain_id
+           WHERE esr.tenant_id = ? AND esr.instrument_id = ? AND esd.is_driver = 1
+           GROUP BY esr.id, esd.id`
+        )
+        .all(req.user!.tenantId, instrumentId) as { response_id: string; domain_id: string; domain_mean: number }[];
+
+      const items = driverDomains
+        .map((domain) => {
+          const pairs: [number, number][] = domainMeansByResponse
+            .filter((row) => row.domain_id === domain.id)
+            .map((row) => [row.domain_mean, overallMap.get(row.response_id)])
+            .filter((pair): pair is [number, number] => pair[1] !== undefined);
+          return { domainId: domain.id, nameAr: domain.name_ar, nameEn: domain.name_en, n: pairs.length, correlation: pearsonCorrelation(pairs) };
+        })
+        .filter((item) => item.n >= MIN_GROUP_SIZE_FOR_REPORTING)
+        .sort((a, b) => (b.correlation ?? 0) - (a.correlation ?? 0));
+
+      res.json({ items });
+    }
+  );
+
+  // -------------------------------------------------------------------------
+  // Employee improvement plans (OPT-03D) — links a driver domain's weak result to a tracked
+  // corrective action, mirroring how service_recovery_cases track PREMs-side follow-up.
+  // -------------------------------------------------------------------------
+  router.get('/employee-experience/improvement-plans', requireRole('SystemAdmin', 'QualityManager', 'DepartmentManager'), (req: Request, res: Response) => {
+    const effectiveDeptId = req.user!.role === 'DepartmentManager' ? req.user!.departmentId : undefined;
+    const rows = db
+      .prepare(
+        `SELECT p.id, p.title, p.status, p.due_date, p.created_at, p.department_id, d.name_ar as department_name_ar,
+                p.domain_id, u.full_name as owner_name
+         FROM employee_improvement_plans p
+         LEFT JOIN departments d ON d.id = p.department_id
+         LEFT JOIN users u ON u.id = p.owner_user_id
+         WHERE p.tenant_id = ? ${effectiveDeptId ? 'AND p.department_id = ?' : ''}
+         ORDER BY p.created_at DESC`
+      )
+      .all(...[req.user!.tenantId, ...(effectiveDeptId ? [effectiveDeptId] : [])]);
+    res.json({ plans: rows });
+  });
+
+  router.post(
+    '/employee-experience/improvement-plans',
+    requireRole('SystemAdmin', 'QualityManager'),
+    express.json({ limit: '8kb' }),
+    (req: Request, res: Response) => {
+      const body = req.body as { title?: string; departmentId?: string; domainId?: string; ownerUserId?: string; dueDate?: string };
+      if (!body.title) {
+        res.status(400).json({ error: 'title_required' });
+        return;
+      }
+      const id = uid();
+      db.prepare(
+        'INSERT INTO employee_improvement_plans (id, tenant_id, department_id, domain_id, title, owner_user_id, due_date) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run(id, req.user!.tenantId, body.departmentId ?? null, body.domainId ?? null, body.title, body.ownerUserId ?? null, body.dueDate ?? null);
+      logAudit(db, req.user!.tenantId, req.user!.id, 'employee_improvement_plan_created', 'employee_improvement_plans', id, { title: body.title });
+      res.status(201).json({ id });
+    }
+  );
+
+  router.patch(
+    '/employee-experience/improvement-plans/:id',
+    requireRole('SystemAdmin', 'QualityManager'),
+    express.json({ limit: '4kb' }),
+    (req: Request, res: Response) => {
+      const body = req.body as { status?: string };
+      if (!body.status) {
+        res.status(400).json({ error: 'status_required' });
+        return;
+      }
+      db.prepare('UPDATE employee_improvement_plans SET status = ? WHERE id = ? AND tenant_id = ?').run(body.status, req.params.id, req.user!.tenantId);
+      logAudit(db, req.user!.tenantId, req.user!.id, 'employee_improvement_plan_updated', 'employee_improvement_plans', req.params.id, { status: body.status });
+      res.json({ ok: true });
+    }
+  );
 
   // -------------------------------------------------------------------------
   // Audit log

@@ -85,6 +85,14 @@ export function composeInvitationMessage(templateNameAr: string, templateNameEn:
   return `${templateNameAr}: نرجو مشاركتنا رأيك — ${surveyUrl}`;
 }
 
+/** Composes the anonymous employee experience/engagement survey invitation SMS. */
+export function composeEmployeeSurveyMessage(instrumentNameAr: string, instrumentNameEn: string, surveyUrl: string, language: 'ar' | 'en'): string {
+  if (language === 'en') {
+    return `${instrumentNameEn}: your response is fully anonymous — ${surveyUrl}`;
+  }
+  return `${instrumentNameAr}: إجابتك مجهولة تمامًا — ${surveyUrl}`;
+}
+
 /** Composes the closed-loop notification sent once a patient's service recovery case is resolved. */
 export function composeResolutionMessage(hospitalNameAr: string, hospitalNameEn: string, language: 'ar' | 'en'): string {
   if (language === 'en') {

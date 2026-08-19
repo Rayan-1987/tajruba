@@ -61,6 +61,28 @@ interface PathwaySeed {
   timepoints: PathwayTimepointSeed[];
 }
 
+interface EmployeeQuestionSeed {
+  textAr: string;
+  textEn: string;
+  isOverall?: boolean;
+}
+
+interface EmployeeDomainSeed {
+  code: string;
+  nameAr: string;
+  nameEn: string;
+  isDriver: boolean;
+  questions: EmployeeQuestionSeed[];
+}
+
+interface EmployeeInstrumentSeed {
+  code: string;
+  nameAr: string;
+  nameEn: string;
+  kind: 'annual' | 'pulse';
+  domains: EmployeeDomainSeed[];
+}
+
 interface AncillaryItemSeed {
   textAr: string;
   textEn: string;
@@ -131,6 +153,7 @@ export interface TenantProvisioningResult {
   domainIds: Record<string, string>;
   instrumentIds: Record<string, string>;
   pathwayIds: Record<string, string>;
+  employeeInstrumentIds: Record<string, string>;
 }
 
 /**
@@ -154,6 +177,9 @@ export function provisionTenantDefaults(db: Db, root: string, tenantId: string):
   );
   const ancillaryServices: AncillaryServiceSeed[] = JSON.parse(
     fs.readFileSync(path.join(root, 'server', 'seed-data', 'ancillary-services.json'), 'utf-8')
+  );
+  const employeeSurvey: { instruments: EmployeeInstrumentSeed[] } = JSON.parse(
+    fs.readFileSync(path.join(root, 'server', 'seed-data', 'employee-survey.json'), 'utf-8')
   );
 
   const insertDomain = db.prepare(
@@ -182,6 +208,17 @@ export function provisionTenantDefaults(db: Db, root: string, tenantId: string):
   const insertTimepoint = db.prepare(
     `INSERT INTO pathway_timepoints
      (id, pathway_id, code, name_ar, offset_days, window_days, instrument_ids_json, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  const insertEmployeeInstrument = db.prepare(
+    'INSERT INTO employee_survey_instruments (id, tenant_id, code, name_ar, name_en, kind) VALUES (?, ?, ?, ?, ?, ?)'
+  );
+  const insertEmployeeDomain = db.prepare(
+    'INSERT INTO employee_survey_domains (id, tenant_id, instrument_id, code, name_ar, name_en, is_driver) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  );
+  const insertEmployeeQuestion = db.prepare(
+    `INSERT INTO employee_survey_questions
+     (id, tenant_id, domain_id, text_ar, text_en, answer_type, is_overall, sort_order)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   );
 
@@ -295,5 +332,29 @@ export function provisionTenantDefaults(db: Db, root: string, tenantId: string):
     });
   }
 
-  return { templateIds, questionIds, domainIds, instrumentIds, pathwayIds };
+  // --- Employee Experience & Engagement instruments (OPT-03) ---------------
+  const employeeInstrumentIds: Record<string, string> = {};
+  for (const instrument of employeeSurvey.instruments) {
+    const instrumentId = uid();
+    employeeInstrumentIds[instrument.code] = instrumentId;
+    insertEmployeeInstrument.run(instrumentId, tenantId, instrument.code, instrument.nameAr, instrument.nameEn, instrument.kind);
+    for (const domain of instrument.domains) {
+      const domainId = uid();
+      insertEmployeeDomain.run(domainId, tenantId, instrumentId, domain.code, domain.nameAr, domain.nameEn, domain.isDriver ? 1 : 0);
+      domain.questions.forEach((question, index) => {
+        insertEmployeeQuestion.run(
+          uid(),
+          tenantId,
+          domainId,
+          question.textAr,
+          question.textEn,
+          'likert5',
+          question.isOverall ? 1 : 0,
+          index
+        );
+      });
+    }
+  }
+
+  return { templateIds, questionIds, domainIds, instrumentIds, pathwayIds, employeeInstrumentIds };
 }

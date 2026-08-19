@@ -1,0 +1,108 @@
+{
+  "instruments": [
+    {
+      "code": "EES_ANNUAL",
+      "nameAr": "استبانة تجربة وارتباط الموظف السنوية",
+      "nameEn": "Annual Employee Experience & Engagement Survey",
+      "kind": "annual",
+      "domains": [
+        {
+          "code": "LEAD",
+          "nameAr": "القيادة والدعم الإداري",
+          "nameEn": "Leadership & Managerial Support",
+          "isDriver": true,
+          "questions": [
+            { "textAr": "مديري المباشر يدعمني ويستمع لملاحظاتي", "textEn": "My direct manager supports me and listens to my feedback" },
+            { "textAr": "قيادة الإدارة تتخذ قرارات واضحة ومتسقة", "textEn": "Leadership makes clear and consistent decisions" }
+          ]
+        },
+        {
+          "code": "GROWTH",
+          "nameAr": "التقدير والتطوير المهني",
+          "nameEn": "Recognition & Professional Growth",
+          "isDriver": true,
+          "questions": [
+            { "textAr": "أشعر بالتقدير على الجهد الذي أبذله في عملي", "textEn": "I feel recognized for the effort I put into my work" },
+            { "textAr": "تتوفر لي فرص حقيقية للتطور المهني والتدريب", "textEn": "I have real opportunities for professional development and training" }
+          ]
+        },
+        {
+          "code": "WORKLOAD",
+          "nameAr": "عبء العمل وبيئة العمل",
+          "nameEn": "Workload & Work Environment",
+          "isDriver": true,
+          "questions": [
+            { "textAr": "عبء العمل الموكل لي معقول ويسمح بأداء عملي بجودة", "textEn": "My workload is reasonable and allows me to do quality work" },
+            { "textAr": "بيئة العمل المادية والتجهيزات مناسبة لأداء مهامي", "textEn": "The physical work environment and equipment support my duties" }
+          ]
+        },
+        {
+          "code": "COMM",
+          "nameAr": "التواصل والمشاركة في القرار",
+          "nameEn": "Communication & Voice",
+          "isDriver": true,
+          "questions": [
+            { "textAr": "أُبلَّغ بالتغييرات التي تخص عملي في وقت مناسب", "textEn": "I am informed of changes affecting my work in a timely manner" },
+            { "textAr": "رأيي يؤخذ بعين الاعتبار في القرارات التي تخص قسمي", "textEn": "My opinion is considered in decisions affecting my department" }
+          ]
+        },
+        {
+          "code": "WELLBEING",
+          "nameAr": "التوازن والرفاهية النفسية",
+          "nameEn": "Work-Life Balance & Wellbeing",
+          "isDriver": true,
+          "questions": [
+            { "textAr": "أستطيع تحقيق توازن مناسب بين عملي وحياتي الشخصية", "textEn": "I can maintain a reasonable balance between my work and personal life" },
+            { "textAr": "لا أشعر بإرهاق أو ضغط نفسي مستمر بسبب العمل", "textEn": "I do not feel constant burnout or psychological strain because of work" }
+          ]
+        },
+        {
+          "code": "OVR",
+          "nameAr": "الارتباط الوظيفي العام",
+          "nameEn": "Overall Engagement",
+          "isDriver": false,
+          "questions": [
+            { "textAr": "أنصح بهذه الجهة كمكان عمل جيد لأصدقائي وزملائي", "textEn": "I would recommend this organization as a good place to work", "isOverall": true },
+            { "textAr": "أنوي الاستمرار في العمل بهذه الجهة خلال العامين القادمين", "textEn": "I intend to continue working at this organization over the next two years" }
+          ]
+        }
+      ]
+    },
+    {
+      "code": "EES_PULSE",
+      "nameAr": "استبانة نبضية لتجربة الموظف",
+      "nameEn": "Employee Pulse Survey",
+      "kind": "pulse",
+      "domains": [
+        {
+          "code": "LEAD",
+          "nameAr": "القيادة والدعم الإداري",
+          "nameEn": "Leadership & Managerial Support",
+          "isDriver": true,
+          "questions": [{ "textAr": "أشعر بدعم مديري المباشر هذا الأسبوع", "textEn": "I felt supported by my direct manager this week" }]
+        },
+        {
+          "code": "WORKLOAD",
+          "nameAr": "عبء العمل وبيئة العمل",
+          "nameEn": "Workload & Work Environment",
+          "isDriver": true,
+          "questions": [{ "textAr": "عبء عملي كان معقولاً هذه الفترة", "textEn": "My workload felt reasonable this period" }]
+        },
+        {
+          "code": "WELLBEING",
+          "nameAr": "التوازن والرفاهية النفسية",
+          "nameEn": "Work-Life Balance & Wellbeing",
+          "isDriver": true,
+          "questions": [{ "textAr": "لم أشعر بإرهاق ملحوظ هذه الفترة", "textEn": "I did not feel notable burnout this period" }]
+        },
+        {
+          "code": "OVR",
+          "nameAr": "الارتباط الوظيفي العام",
+          "nameEn": "Overall Engagement",
+          "isDriver": false,
+          "questions": [{ "textAr": "بشكل عام أشعر بالرضا عن عملي هذا الأسبوع", "textEn": "Overall I feel satisfied with my work this week", "isOverall": true }]
+        }
+      ]
+    }
+  ]
+}
