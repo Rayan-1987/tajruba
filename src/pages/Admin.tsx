@@ -28,6 +28,7 @@ interface Domain {
   name_en: string;
   service_type: ServiceType;
   benchmark_top_box_percent: number;
+  target_top_box_percent: number | null;
   active: number;
   is_ancillary: number;
 }
@@ -451,7 +452,7 @@ function QuestionBankTab() {
   const [qCahpsItem, setQCahpsItem] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [editingDomain, setEditingDomain] = useState<Record<string, { nameAr: string; nameEn: string; benchmark: number }>>({});
+  const [editingDomain, setEditingDomain] = useState<Record<string, { nameAr: string; nameEn: string; benchmark: number; target: string }>>({});
   const [editingQuestion, setEditingQuestion] = useState<Record<string, { textAr: string; textEn: string }>>({});
 
   const load = () => {
@@ -488,12 +489,25 @@ function QuestionBankTab() {
   };
 
   const startEditDomain = (d: Domain) =>
-    setEditingDomain((prev) => ({ ...prev, [d.id]: { nameAr: d.name_ar, nameEn: d.name_en, benchmark: d.benchmark_top_box_percent } }));
+    setEditingDomain((prev) => ({
+      ...prev,
+      [d.id]: {
+        nameAr: d.name_ar,
+        nameEn: d.name_en,
+        benchmark: d.benchmark_top_box_percent,
+        target: d.target_top_box_percent != null ? String(d.target_top_box_percent) : ''
+      }
+    }));
 
   const saveEditDomain = async (id: string) => {
     const edit = editingDomain[id];
     if (!edit) return;
-    await api.patch(`/question-bank/domains/${id}`, { nameAr: edit.nameAr, nameEn: edit.nameEn, benchmarkTopBoxPercent: edit.benchmark });
+    await api.patch(`/question-bank/domains/${id}`, {
+      nameAr: edit.nameAr,
+      nameEn: edit.nameEn,
+      benchmarkTopBoxPercent: edit.benchmark,
+      targetTopBoxPercent: edit.target.trim() === '' ? null : Number(edit.target)
+    });
     setEditingDomain((prev) => {
       const next = { ...prev };
       delete next[id];
@@ -680,10 +694,22 @@ function QuestionBankTab() {
                               className="w-20 rounded border border-slate-300 px-2 py-1 text-xs"
                               placeholder="المعيار %"
                             />
+                            <input
+                              type="number"
+                              min={0}
+                              max={100}
+                              value={editingDomain[d.id].target}
+                              onChange={(e) => setEditingDomain((prev) => ({ ...prev, [d.id]: { ...prev[d.id], target: e.target.value } }))}
+                              className="w-24 rounded border border-slate-300 px-2 py-1 text-xs"
+                              placeholder="المستهدف % (اختياري)"
+                            />
                           </div>
                         ) : (
                           <span className={`text-sm font-semibold ${d.active ? 'text-slate-700' : 'text-slate-400 line-through'}`}>
-                            {d.name_ar} <span className="text-xs font-normal text-slate-400">({d.code}, معيار {d.benchmark_top_box_percent}%)</span>
+                            {d.name_ar}{' '}
+                            <span className="text-xs font-normal text-slate-400">
+                              ({d.code}, معيار {d.benchmark_top_box_percent}%{d.target_top_box_percent != null && `, مستهدف ${d.target_top_box_percent}%`})
+                            </span>
                             {d.is_ancillary === 1 && (
                               <span className="ms-1 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700">
                                 خدمة مساندة

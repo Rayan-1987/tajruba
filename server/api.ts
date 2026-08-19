@@ -1426,7 +1426,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     const includeInactive = req.query.includeInactive === '1' && req.user!.role === 'SystemAdmin';
     const domains = db
       .prepare(
-        `SELECT id, code, name_ar, name_en, service_type, benchmark_top_box_percent, active, is_ancillary FROM question_domains
+        `SELECT id, code, name_ar, name_en, service_type, benchmark_top_box_percent, target_top_box_percent, active, is_ancillary FROM question_domains
          WHERE tenant_id = ? ${includeInactive ? '' : 'AND active = 1'}`
       )
       .all(req.user!.tenantId);
@@ -1474,16 +1474,19 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         res.status(404).json({ error: 'not_found' });
         return;
       }
-      const { nameAr, nameEn, benchmarkTopBoxPercent, active } = req.body as {
+      const { nameAr, nameEn, benchmarkTopBoxPercent, targetTopBoxPercent, active } = req.body as {
         nameAr?: string;
         nameEn?: string;
         benchmarkTopBoxPercent?: number;
+        targetTopBoxPercent?: number | null;
         active?: boolean;
       };
       if (nameAr !== undefined) db.prepare('UPDATE question_domains SET name_ar = ? WHERE id = ?').run(nameAr, req.params.id);
       if (nameEn !== undefined) db.prepare('UPDATE question_domains SET name_en = ? WHERE id = ?').run(nameEn, req.params.id);
       if (benchmarkTopBoxPercent !== undefined)
         db.prepare('UPDATE question_domains SET benchmark_top_box_percent = ? WHERE id = ?').run(benchmarkTopBoxPercent, req.params.id);
+      if (targetTopBoxPercent !== undefined)
+        db.prepare('UPDATE question_domains SET target_top_box_percent = ? WHERE id = ?').run(targetTopBoxPercent, req.params.id);
       if (active !== undefined) db.prepare('UPDATE question_domains SET active = ? WHERE id = ?').run(active ? 1 : 0, req.params.id);
       logAudit(db, req.user!.tenantId, req.user!.id, 'domain_updated', 'question_domain', req.params.id, req.body);
       res.json({ ok: true });
@@ -1769,6 +1772,17 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     return (db.prepare(sql).all(...params) as { v: number }[]).map((r) => r.v);
   }
 
+  // RAG status for a domain's current score against its admin-set target (ANL-11): green once
+  // the target is met, amber within 5 points below it, red further behind. No status without
+  // both a target and enough data to score.
+  const TARGET_NEAR_MARGIN_POINTS = 5;
+  function targetStatus(topBoxPercent: number | null, target: number | null): 'met' | 'near' | 'below' | null {
+    if (topBoxPercent == null || target == null) return null;
+    if (topBoxPercent >= target) return 'met';
+    if (topBoxPercent >= target - TARGET_NEAR_MARGIN_POINTS) return 'near';
+    return 'below';
+  }
+
   /** A single number summarizing one answer type, matching each type's primary reported metric. */
   function primaryMetric(answerType: AnswerType, values: number[]): number | null {
     if (answerType === 'nps') return scoreNps(values).score;
@@ -1807,7 +1821,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
 
     const domains = db
       .prepare(
-        `SELECT id, code, name_ar, name_en, service_type, benchmark_top_box_percent FROM question_domains
+        `SELECT id, code, name_ar, name_en, service_type, benchmark_top_box_percent, target_top_box_percent FROM question_domains
          WHERE tenant_id = ? AND active = 1 AND (? IS NULL OR service_type = ?)`
       )
       .all(req.user!.tenantId, serviceType ?? null, serviceType ?? null) as {
@@ -1817,6 +1831,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       name_en: string;
       service_type: string;
       benchmark_top_box_percent: number;
+      target_top_box_percent: number | null;
     }[];
 
     const results = domains.map((domain) => {
@@ -1874,6 +1889,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       return {
         domain: { id: domain.id, code: domain.code, nameAr: domain.name_ar, nameEn: domain.name_en, serviceType: domain.service_type },
         score: domainScore,
+        targetTopBoxPercent: domain.target_top_box_percent,
+        targetStatus: targetStatus(domainScore.topBoxPercent, domain.target_top_box_percent),
         benchmarks,
         questions: questionScores
       };
@@ -1901,7 +1918,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
 
     const domains = db
       .prepare(
-        `SELECT id, code, name_ar, name_en, service_type, benchmark_top_box_percent FROM question_domains
+        `SELECT id, code, name_ar, name_en, service_type, benchmark_top_box_percent, target_top_box_percent FROM question_domains
          WHERE tenant_id = ? AND active = 1 AND (? IS NULL OR service_type = ?)`
       )
       .all(req.user!.tenantId, serviceType ?? null, serviceType ?? null) as {
@@ -1911,9 +1928,22 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       name_en: string;
       service_type: string;
       benchmark_top_box_percent: number;
+      target_top_box_percent: number | null;
     }[];
 
-    const headers = ['المحور', 'الرمز', 'الخدمة', 'عدد الاستجابات', 'المتوسط', 'نسبة Top-Box %', 'المعيار المرجعي %', 'الفرق (نقطة مئوية)'];
+    const headers = [
+      'المحور',
+      'الرمز',
+      'الخدمة',
+      'عدد الاستجابات',
+      'المتوسط',
+      'نسبة Top-Box %',
+      'المعيار المرجعي %',
+      'الفرق (نقطة مئوية)',
+      'المستهدف %',
+      'حالة المستهدف'
+    ];
+    const TARGET_STATUS_LABELS_AR: Record<'met' | 'near' | 'below', string> = { met: 'محقَّق', near: 'قريب', below: 'دون المستهدف' };
     const rows: ExportCell[][] = domains.map((domain) => {
       // Only likert5 questions feed the pooled domain score — nps/yesno items have a different
       // scale and are excluded here the same way /reports/scores excludes them (allDomainValues).
@@ -1922,7 +1952,19 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       ).map((q) => q.id);
       const allValues = likertQuestionIds.flatMap((qId) => fetchQuestionValues(req.user!.tenantId, qId, effectiveDeptId));
       const score = scoreDomain(domain.id, allValues, domain.benchmark_top_box_percent);
-      return [domain.name_ar, domain.code, domain.service_type, score.n, score.mean, score.topBoxPercent, domain.benchmark_top_box_percent, score.diffPercentPoints];
+      const status = targetStatus(score.topBoxPercent, domain.target_top_box_percent);
+      return [
+        domain.name_ar,
+        domain.code,
+        domain.service_type,
+        score.n,
+        score.mean,
+        score.topBoxPercent,
+        domain.benchmark_top_box_percent,
+        score.diffPercentPoints,
+        domain.target_top_box_percent,
+        status ? TARGET_STATUS_LABELS_AR[status] : null
+      ];
     });
 
     if (format === 'xlsx') await sendXlsx(res, 'tajruba-scores', 'المحاور', headers, rows);

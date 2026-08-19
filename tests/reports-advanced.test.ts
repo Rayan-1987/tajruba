@@ -342,3 +342,64 @@ test('external benchmarks are manageable by SystemAdmin/QualityManager only, and
     server.close();
   }
 });
+
+test('reports/scores exposes a domain target and its RAG status vs the current Top-Box score', async () => {
+  const { server, baseUrl } = await startServer();
+  try {
+    const adminCookie = await login(baseUrl, 'admin@tajruba.sa', 'Tajruba123!');
+    const departments = (await (await fetch(`${baseUrl}/api/departments`, { headers: { cookie: adminCookie } })).json()) as {
+      departments: DeptRow[];
+    };
+    const templates = (await (await fetch(`${baseUrl}/api/templates`, { headers: { cookie: adminCookie } })).json()) as {
+      templates: Template[];
+    };
+    const edDept = departments.departments.find((d) => d.service_type === 'ED')!;
+    const edTemplate = templates.templates.find((t) => t.service_type === 'ED')!;
+    const overallQ = edTemplate.questions.find((q) => q.code === 'ED-OVR-001')!;
+
+    const domainsRes = await fetch(`${baseUrl}/api/question-bank`, { headers: { cookie: adminCookie } });
+    const domainsBody = (await domainsRes.json()) as { domains: { id: string; code: string }[] };
+    const overallDomainId = domainsBody.domains.find((d) => d.code === 'ED_OVR')!.id;
+
+    // No target set yet: targetStatus must be null even though the domain has data.
+    for (let i = 0; i < 30; i++) {
+      await submitPhone(baseUrl, adminCookie, edTemplate.id, edDept.id, `05750000${i}`, [{ questionId: overallQ.id, value: 5 }]);
+    }
+    const beforeTarget = (await (
+      await fetch(`${baseUrl}/api/reports/scores?serviceType=ED`, { headers: { cookie: adminCookie } })
+    ).json()) as { domains: { domain: { code: string }; targetTopBoxPercent: number | null; targetStatus: string | null }[] };
+    const beforeDomain = beforeTarget.domains.find((d) => d.domain.code === 'ED_OVR')!;
+    assert.equal(beforeDomain.targetTopBoxPercent, null);
+    assert.equal(beforeDomain.targetStatus, null);
+
+    // Set a low target (10%) that an all-5s domain easily clears -> 'met'.
+    const patchLow = await fetch(`${baseUrl}/api/question-bank/domains/${overallDomainId}`, {
+      method: 'PATCH',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ targetTopBoxPercent: 10 })
+    });
+    assert.equal(patchLow.status, 200);
+    const metRes = (await (
+      await fetch(`${baseUrl}/api/reports/scores?serviceType=ED`, { headers: { cookie: adminCookie } })
+    ).json()) as { domains: { domain: { code: string }; targetTopBoxPercent: number | null; targetStatus: string | null }[] };
+    const metDomain = metRes.domains.find((d) => d.domain.code === 'ED_OVR')!;
+    assert.equal(metDomain.targetTopBoxPercent, 10);
+    assert.equal(metDomain.targetStatus, 'met');
+
+    // Set a target above the maximum possible Top-Box score (100%) so it can never be 'met',
+    // regardless of exactly how the seeded background demo data scores.
+    await fetch(`${baseUrl}/api/question-bank/domains/${overallDomainId}`, {
+      method: 'PATCH',
+      headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ targetTopBoxPercent: 101 })
+    });
+    const belowRes = (await (
+      await fetch(`${baseUrl}/api/reports/scores?serviceType=ED`, { headers: { cookie: adminCookie } })
+    ).json()) as { domains: { domain: { code: string }; targetTopBoxPercent: number | null; targetStatus: string | null }[] };
+    const belowDomain = belowRes.domains.find((d) => d.domain.code === 'ED_OVR')!;
+    assert.equal(belowDomain.targetTopBoxPercent, 101);
+    assert.notEqual(belowDomain.targetStatus, 'met');
+  } finally {
+    server.close();
+  }
+});

@@ -76,6 +76,8 @@ interface DomainReport {
   };
   benchmarks: ExternalBenchmark[];
   questions: QuestionScore[];
+  targetTopBoxPercent: number | null;
+  targetStatus: 'met' | 'near' | 'below' | null;
 }
 
 interface PriorityItem {
@@ -398,6 +400,11 @@ function DomainCard({
   const diffColor = diff == null ? 'text-slate-400' : diff >= 0 ? 'text-emerald-600' : 'text-red-600';
   const badge = CONFIDENCE_BADGE[d.score.confidenceTier];
   const reliabilityWarning = d.score.confidenceTier === 'insufficient' || d.score.confidenceTier === 'directional';
+  const targetBadge: Record<'met' | 'near' | 'below', { label: string; className: string }> = {
+    met: { label: 'محقَّق', className: 'bg-emerald-100 text-emerald-700' },
+    near: { label: 'قريب من المستهدف', className: 'bg-amber-100 text-amber-700' },
+    below: { label: 'دون المستهدف', className: 'bg-red-100 text-red-700' }
+  };
 
   return (
     <div className="rounded-2xl bg-white p-4 shadow-sm transition hover:shadow-md">
@@ -416,6 +423,16 @@ function DomainCard({
         <p className="mt-1 text-xs text-slate-400">
           متوسط {d.score.mean?.toFixed(2) ?? '-'} من 5 · n = {d.score.n}
         </p>
+        {d.targetTopBoxPercent != null && (
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <span className="text-[10px] text-slate-400">المستهدف {d.targetTopBoxPercent}%</span>
+            {d.targetStatus && (
+              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${targetBadge[d.targetStatus].className}`}>
+                {targetBadge[d.targetStatus].label}
+              </span>
+            )}
+          </div>
+        )}
         {reliabilityWarning && (
           <p className="mt-1 text-[10px] text-red-600">* قد لا تكون النتيجة موثوقة بسبب حجم العينة (n = {d.score.n})</p>
         )}

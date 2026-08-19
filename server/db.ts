@@ -97,6 +97,11 @@ CREATE TABLE IF NOT EXISTS question_domains (
   name_en TEXT NOT NULL,
   service_type TEXT NOT NULL,
   benchmark_top_box_percent REAL NOT NULL DEFAULT 75.0,
+  -- Admin-set improvement target for this domain (e.g. "4.0/5" style targets some hospitals track
+  -- separately from any peer-group benchmark). NULL until an admin sets one — unlike
+  -- benchmark_top_box_percent there is no seeded default, since a target is a local management
+  -- decision, not a reference value.
+  target_top_box_percent REAL,
   active INTEGER NOT NULL DEFAULT 1,
   -- True for the Lab/Radiology/Pharmacy gated-follow-up domains auto-attached during
   -- provisioning (see AncillaryServiceSeed.applicableServices in provisioning.ts), so the
