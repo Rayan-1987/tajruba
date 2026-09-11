@@ -51,9 +51,11 @@ import { buildEnrollmentQrCode, consumeRecoveryCode, createMfaSecret, generateRe
 import {
   AGE_BANDS,
   DEPENDS_ON_OPERATORS,
+  QI_PHASE_CODES,
   type AgeBand,
   type AnswerType,
   type DependsOnOperator,
+  type QiPhaseCode,
   type RecoveryStatus,
   type Role,
   type ServiceType
@@ -3075,6 +3077,275 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       res.json({ ok: true });
     }
   );
+
+  // -------------------------------------------------------------------------
+  // Quality Improvement (FOCUS-PDCA) — a standalone process-improvement module, independent of
+  // any single service-recovery case, for structured multi-phase QI projects.
+  // -------------------------------------------------------------------------
+  const QI_ROLES = ['SystemAdmin', 'QualityManager', 'DepartmentManager'] as const;
+
+  router.get('/qi-projects', requireRole(...QI_ROLES), (req: Request, res: Response) => {
+    const { clause, params } = departmentScopeFilter(req, 'p');
+    const rows = db
+      .prepare(
+        `SELECT p.id, p.title, p.problem_statement, p.status, p.created_at, p.department_id,
+                d.name_ar as department_name_ar, u.full_name as owner_name,
+                dom.name_ar as linked_domain_name_ar,
+                (SELECT COUNT(*) FROM qi_project_phases ph WHERE ph.project_id = p.id AND ph.status = 'done') as phases_done,
+                (SELECT COUNT(*) FROM qi_pdca_cycles c WHERE c.project_id = p.id) as cycle_count
+         FROM qi_projects p
+         LEFT JOIN departments d ON d.id = p.department_id
+         LEFT JOIN users u ON u.id = p.owner_user_id
+         LEFT JOIN question_domains dom ON dom.id = p.linked_domain_id
+         WHERE p.tenant_id = ? ${clause}
+         ORDER BY p.created_at DESC`
+      )
+      .all(req.user!.tenantId, ...params);
+    res.json({ projects: rows });
+  });
+
+  router.post('/qi-projects', requireRole(...QI_ROLES), express.json({ limit: '8kb' }), (req: Request, res: Response) => {
+    const { title, problemStatement, departmentId, ownerUserId, linkedDomainId } = req.body as {
+      title?: string;
+      problemStatement?: string;
+      departmentId?: string;
+      ownerUserId?: string;
+      linkedDomainId?: string;
+    };
+    if (!title) {
+      res.status(400).json({ error: 'title_required' });
+      return;
+    }
+    if (req.user!.role === 'DepartmentManager' && departmentId && departmentId !== req.user!.departmentId) {
+      res.status(403).json({ error: 'forbidden' });
+      return;
+    }
+    const effectiveDeptId = req.user!.role === 'DepartmentManager' ? req.user!.departmentId : (departmentId ?? null);
+    const id = uid();
+    db.prepare(
+      `INSERT INTO qi_projects (id, tenant_id, department_id, linked_domain_id, title, problem_statement, owner_user_id, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, req.user!.tenantId, effectiveDeptId, linkedDomainId ?? null, title, problemStatement ?? null, ownerUserId ?? null, req.user!.id);
+
+    const insertPhase = db.prepare(
+      'INSERT INTO qi_project_phases (id, project_id, phase_code, sort_order, status) VALUES (?, ?, ?, ?, ?)'
+    );
+    QI_PHASE_CODES.forEach((code, index) => {
+      insertPhase.run(uid(), id, code, index, index === 0 ? 'in_progress' : 'pending');
+    });
+
+    logAudit(db, req.user!.tenantId, req.user!.id, 'qi_project_created', 'qi_project', id, { title });
+    res.status(201).json({ id });
+  });
+
+  router.get('/qi-projects/:id', requireRole(...QI_ROLES), (req: Request, res: Response) => {
+    const project = db
+      .prepare(
+        `SELECT p.id, p.title, p.problem_statement, p.status, p.created_at, p.department_id, p.linked_domain_id,
+                p.owner_user_id, d.name_ar as department_name_ar, u.full_name as owner_name,
+                dom.name_ar as linked_domain_name_ar
+         FROM qi_projects p
+         LEFT JOIN departments d ON d.id = p.department_id
+         LEFT JOIN users u ON u.id = p.owner_user_id
+         LEFT JOIN question_domains dom ON dom.id = p.linked_domain_id
+         WHERE p.id = ? AND p.tenant_id = ?`
+      )
+      .get(req.params.id, req.user!.tenantId) as
+      | { id: string; department_id: string | null; [key: string]: unknown }
+      | undefined;
+    if (!project) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    if (req.user!.role === 'DepartmentManager' && project.department_id !== req.user!.departmentId) {
+      res.status(403).json({ error: 'forbidden' });
+      return;
+    }
+    const phases = db
+      .prepare('SELECT id, phase_code, sort_order, notes, status, completed_at FROM qi_project_phases WHERE project_id = ? ORDER BY sort_order')
+      .all(project.id);
+    const team = db
+      .prepare(
+        `SELECT tm.id, tm.name, tm.role_label, tm.user_id, tm.added_at, u.full_name as user_full_name
+         FROM qi_team_members tm LEFT JOIN users u ON u.id = tm.user_id
+         WHERE tm.project_id = ? ORDER BY tm.added_at`
+      )
+      .all(project.id);
+    const cycles = db
+      .prepare(
+        `SELECT id, cycle_number, metric_label, baseline_value, result_value, plan_notes, do_notes, check_notes, act_notes, status, started_at, completed_at
+         FROM qi_pdca_cycles WHERE project_id = ? ORDER BY cycle_number`
+      )
+      .all(project.id);
+    res.json({ project, phases, team, cycles });
+  });
+
+  router.patch('/qi-projects/:id', requireRole(...QI_ROLES), express.json({ limit: '8kb' }), (req: Request, res: Response) => {
+    const existing = db.prepare('SELECT id, tenant_id, department_id FROM qi_projects WHERE id = ?').get(req.params.id) as
+      | { id: string; tenant_id: string; department_id: string | null }
+      | undefined;
+    if (!existing || existing.tenant_id !== req.user!.tenantId) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    if (req.user!.role === 'DepartmentManager' && existing.department_id !== req.user!.departmentId) {
+      res.status(403).json({ error: 'forbidden' });
+      return;
+    }
+    const { status, title, problemStatement, ownerUserId } = req.body as {
+      status?: string;
+      title?: string;
+      problemStatement?: string;
+      ownerUserId?: string;
+    };
+    if (status !== undefined) db.prepare('UPDATE qi_projects SET status = ? WHERE id = ?').run(status, existing.id);
+    if (title !== undefined) db.prepare('UPDATE qi_projects SET title = ? WHERE id = ?').run(title, existing.id);
+    if (problemStatement !== undefined) db.prepare('UPDATE qi_projects SET problem_statement = ? WHERE id = ?').run(problemStatement, existing.id);
+    if (ownerUserId !== undefined) db.prepare('UPDATE qi_projects SET owner_user_id = ? WHERE id = ?').run(ownerUserId || null, existing.id);
+    logAudit(db, req.user!.tenantId, req.user!.id, 'qi_project_updated', 'qi_project', existing.id, { status });
+    res.json({ ok: true });
+  });
+
+  function loadQiProjectScoped(db: Db, req: Request): { id: string; department_id: string | null } | null {
+    const project = db.prepare('SELECT id, tenant_id, department_id FROM qi_projects WHERE id = ?').get(req.params.id) as
+      | { id: string; tenant_id: string; department_id: string | null }
+      | undefined;
+    if (!project || project.tenant_id !== req.user!.tenantId) return null;
+    if (req.user!.role === 'DepartmentManager' && project.department_id !== req.user!.departmentId) return null;
+    return project;
+  }
+
+  router.patch(
+    '/qi-projects/:id/phases/:phaseCode',
+    requireRole(...QI_ROLES),
+    express.json({ limit: '8kb' }),
+    (req: Request, res: Response) => {
+      const project = loadQiProjectScoped(db, req);
+      if (!project) {
+        res.status(404).json({ error: 'not_found' });
+        return;
+      }
+      const phaseCode = req.params.phaseCode as QiPhaseCode;
+      if (!QI_PHASE_CODES.includes(phaseCode)) {
+        res.status(400).json({ error: 'invalid_phase' });
+        return;
+      }
+      const { notes, status } = req.body as { notes?: string; status?: 'pending' | 'in_progress' | 'done' };
+      if (notes !== undefined)
+        db.prepare('UPDATE qi_project_phases SET notes = ? WHERE project_id = ? AND phase_code = ?').run(notes, project.id, phaseCode);
+      if (status !== undefined) {
+        db.prepare('UPDATE qi_project_phases SET status = ?, completed_at = ? WHERE project_id = ? AND phase_code = ?').run(
+          status,
+          status === 'done' ? new Date().toISOString() : null,
+          project.id,
+          phaseCode
+        );
+        // Advance the next pending phase to in_progress so the tracker always shows one active
+        // step, mirroring how a QI team actually works through FOCUS-PDCA sequentially.
+        if (status === 'done') {
+          const nextIndex = QI_PHASE_CODES.indexOf(phaseCode) + 1;
+          if (nextIndex < QI_PHASE_CODES.length) {
+            const nextCode = QI_PHASE_CODES[nextIndex];
+            db.prepare("UPDATE qi_project_phases SET status = 'in_progress' WHERE project_id = ? AND phase_code = ? AND status = 'pending'").run(
+              project.id,
+              nextCode
+            );
+          }
+        }
+      }
+      logAudit(db, req.user!.tenantId, req.user!.id, 'qi_phase_updated', 'qi_project', project.id, { phaseCode, status });
+      res.json({ ok: true });
+    }
+  );
+
+  router.post('/qi-projects/:id/team', requireRole(...QI_ROLES), express.json({ limit: '4kb' }), (req: Request, res: Response) => {
+    const project = loadQiProjectScoped(db, req);
+    if (!project) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    const { name, roleLabel, userId } = req.body as { name?: string; roleLabel?: string; userId?: string };
+    if (!name) {
+      res.status(400).json({ error: 'name_required' });
+      return;
+    }
+    const id = uid();
+    db.prepare('INSERT INTO qi_team_members (id, project_id, user_id, name, role_label) VALUES (?, ?, ?, ?, ?)').run(
+      id,
+      project.id,
+      userId ?? null,
+      name,
+      roleLabel ?? null
+    );
+    res.status(201).json({ id });
+  });
+
+  router.delete('/qi-projects/:id/team/:memberId', requireRole(...QI_ROLES), (req: Request, res: Response) => {
+    const project = loadQiProjectScoped(db, req);
+    if (!project) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    db.prepare('DELETE FROM qi_team_members WHERE id = ? AND project_id = ?').run(req.params.memberId, project.id);
+    res.json({ ok: true });
+  });
+
+  router.post('/qi-projects/:id/cycles', requireRole(...QI_ROLES), express.json({ limit: '8kb' }), (req: Request, res: Response) => {
+    const project = loadQiProjectScoped(db, req);
+    if (!project) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    const { metricLabel, baselineValue } = req.body as { metricLabel?: string; baselineValue?: number };
+    const nextCycleNumber = (
+      db.prepare('SELECT COALESCE(MAX(cycle_number), 0) + 1 as n FROM qi_pdca_cycles WHERE project_id = ?').get(project.id) as { n: number }
+    ).n;
+    const id = uid();
+    db.prepare(
+      'INSERT INTO qi_pdca_cycles (id, project_id, cycle_number, metric_label, baseline_value) VALUES (?, ?, ?, ?, ?)'
+    ).run(id, project.id, nextCycleNumber, metricLabel ?? null, baselineValue ?? null);
+    logAudit(db, req.user!.tenantId, req.user!.id, 'qi_cycle_created', 'qi_project', project.id, { cycleNumber: nextCycleNumber });
+    res.status(201).json({ id, cycleNumber: nextCycleNumber });
+  });
+
+  router.patch('/qi-projects/:id/cycles/:cycleId', requireRole(...QI_ROLES), express.json({ limit: '8kb' }), (req: Request, res: Response) => {
+    const project = loadQiProjectScoped(db, req);
+    if (!project) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    const cycle = db.prepare('SELECT id FROM qi_pdca_cycles WHERE id = ? AND project_id = ?').get(req.params.cycleId, project.id);
+    if (!cycle) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    const { planNotes, doNotes, checkNotes, actNotes, resultValue, status } = req.body as {
+      planNotes?: string;
+      doNotes?: string;
+      checkNotes?: string;
+      actNotes?: string;
+      resultValue?: number;
+      status?: 'open' | 'completed';
+    };
+    const updates: [string, string | number | null][] = [
+      ['plan_notes', planNotes],
+      ['do_notes', doNotes],
+      ['check_notes', checkNotes],
+      ['act_notes', actNotes],
+      ['result_value', resultValue]
+    ].filter(([, v]) => v !== undefined) as [string, string | number | null][];
+    for (const [column, value] of updates) {
+      db.prepare(`UPDATE qi_pdca_cycles SET ${column} = ? WHERE id = ?`).run(value, req.params.cycleId);
+    }
+    if (status !== undefined) {
+      db.prepare('UPDATE qi_pdca_cycles SET status = ?, completed_at = ? WHERE id = ?').run(
+        status,
+        status === 'completed' ? new Date().toISOString() : null,
+        req.params.cycleId
+      );
+    }
+    res.json({ ok: true });
+  });
 
   // -------------------------------------------------------------------------
   // Invitations

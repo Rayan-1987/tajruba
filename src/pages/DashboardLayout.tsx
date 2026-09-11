@@ -8,6 +8,11 @@ const NAV_ITEMS: { to: string; label: string; roles?: Role[]; badgeKey?: 'commen
   { to: '/dashboard/reports', label: 'التقارير (PREMs)' },
   { to: '/dashboard/comments', label: 'ذكاء التعليقات', badgeKey: 'comments' },
   { to: '/dashboard/service-recovery', label: 'استعادة الخدمة', badgeKey: 'cases' },
+  {
+    to: '/dashboard/quality-improvement',
+    label: 'تحسين الجودة (FOCUS-PDCA)',
+    roles: ['SystemAdmin', 'QualityManager', 'DepartmentManager']
+  },
   { to: '/dashboard/proms', label: 'النتائج الصحية (PROMs)' },
   { to: '/dashboard/employee-experience', label: 'تجربة الموظف', roles: ['SystemAdmin', 'QualityManager', 'ExecutiveViewer', 'DepartmentManager'] },
   { to: '/dashboard/phone-survey', label: 'استبيان هاتفي' },

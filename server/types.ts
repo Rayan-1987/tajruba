@@ -55,6 +55,15 @@ export const AGE_BANDS: AgeBand[] = ['<18', '18-40', '41-65', '65+'];
 export type DependsOnOperator = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte';
 export const DEPENDS_ON_OPERATORS: DependsOnOperator[] = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte'];
 
+// Fixed FOCUS-PDCA phase order (a standard healthcare quality-improvement methodology): the
+// FOCUS half runs once (Find a process -> Organize a team -> Clarify current knowledge ->
+// Understand causes of variation -> Select the improvement); the PDCA half (Plan -> Do -> Check
+// -> Act) is shown here too as an at-a-glance status checklist for the whole project, but the
+// actual iterative work with notes and before/after metrics lives in qi_pdca_cycles below, since
+// a project typically repeats the Plan-Do-Check-Act loop more than once until the gain holds.
+export type QiPhaseCode = 'FIND' | 'ORGANIZE' | 'CLARIFY' | 'UNDERSTAND' | 'SELECT' | 'PLAN' | 'DO' | 'CHECK' | 'ACT';
+export const QI_PHASE_CODES: QiPhaseCode[] = ['FIND', 'ORGANIZE', 'CLARIFY', 'UNDERSTAND', 'SELECT', 'PLAN', 'DO', 'CHECK', 'ACT'];
+
 export type InvitationStatus = 'pending' | 'sent' | 'opened' | 'completed' | 'expired';
 
 export type CommentSentiment = 'positive' | 'negative' | 'neutral' | 'mixed';

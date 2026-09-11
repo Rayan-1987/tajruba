@@ -602,6 +602,77 @@ CREATE TABLE IF NOT EXISTS employee_improvement_plans (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_emp_plans_tenant ON employee_improvement_plans(tenant_id);
+
+-- Quality Improvement (FOCUS-PDCA): a standalone module for structured process-improvement
+-- projects, independent of any single complaint/case (unlike quality_improvement_plans above,
+-- which is a lightweight CAPA record tied to one service-recovery case). A project may
+-- optionally reference the PREMs domain it targets (linked_domain_id) so quality staff can see
+-- what metric they're trying to move, but the actual before/after numbers are captured per PDCA
+-- cycle below rather than pulled live from reporting, keeping this module decoupled from the
+-- scoring pipeline.
+CREATE TABLE IF NOT EXISTS qi_projects (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  department_id TEXT REFERENCES departments(id) ON DELETE SET NULL,
+  linked_domain_id TEXT REFERENCES question_domains(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  problem_statement TEXT,
+  owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_qi_projects_tenant ON qi_projects(tenant_id);
+
+-- One row per FOCUS-PDCA phase (Find/Organize/Clarify/Understand/Select/Plan/Do/Check/Act),
+-- auto-created in fixed order when a project is created, so the UI can always render all nine
+-- steps and show which are done vs. still pending, rather than a free-form checklist.
+CREATE TABLE IF NOT EXISTS qi_project_phases (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES qi_projects(id) ON DELETE CASCADE,
+  phase_code TEXT NOT NULL,
+  sort_order INTEGER NOT NULL,
+  notes TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  completed_at TEXT,
+  UNIQUE(project_id, phase_code)
+);
+CREATE INDEX IF NOT EXISTS idx_qi_phases_project ON qi_project_phases(project_id);
+
+-- The team assembled during the "Organize" phase. user_id links to a real account when the
+-- member is a Tajruba user; name/role_label cover participants who aren't (e.g. a physician
+-- champion with no system login), which is the common case for a multidisciplinary QI team.
+CREATE TABLE IF NOT EXISTS qi_team_members (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES qi_projects(id) ON DELETE CASCADE,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  name TEXT NOT NULL,
+  role_label TEXT,
+  added_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_qi_team_project ON qi_team_members(project_id);
+
+-- A project's FOCUS work (find/organize/clarify/understand/select) typically runs once, but the
+-- Plan-Do-Check-Act tail is iterative — a project keeps cycling PDCA until the gain holds, per
+-- the methodology. Each cycle carries its own plan/do/check/act notes and an optional before/
+-- after metric pair so quality staff can see whether that cycle actually moved the number.
+CREATE TABLE IF NOT EXISTS qi_pdca_cycles (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES qi_projects(id) ON DELETE CASCADE,
+  cycle_number INTEGER NOT NULL,
+  metric_label TEXT,
+  baseline_value REAL,
+  result_value REAL,
+  plan_notes TEXT,
+  do_notes TEXT,
+  check_notes TEXT,
+  act_notes TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  started_at TEXT NOT NULL DEFAULT (datetime('now')),
+  completed_at TEXT,
+  UNIQUE(project_id, cycle_number)
+);
+CREATE INDEX IF NOT EXISTS idx_qi_cycles_project ON qi_pdca_cycles(project_id);
 `;
 
 export function openDatabase(databasePath: string): Db {
