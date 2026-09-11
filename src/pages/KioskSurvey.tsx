@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api, ApiError } from '../api';
-import { SurveyQuestionCard, type SurveyQuestion } from '../components/SurveyQuestionCard';
+import { SurveyQuestionCard, evaluateGate, type SurveyQuestion } from '../components/SurveyQuestionCard';
 
 const STRINGS = {
   ar: {
@@ -130,7 +130,7 @@ export default function KioskSurvey() {
   const isVisible = (q: SurveyQuestion): boolean => {
     if (!q.depends_on_code) return true;
     const gateId = idByCode[q.depends_on_code];
-    return answers[gateId] === 1;
+    return evaluateGate(answers[gateId], q.depends_on_operator, q.depends_on_value);
   };
 
   const visibleQuestions = survey.questions.filter(isVisible);

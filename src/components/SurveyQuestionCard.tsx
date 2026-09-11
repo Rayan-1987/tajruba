@@ -1,3 +1,5 @@
+export type DependsOnOperator = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte';
+
 export interface SurveyQuestion {
   id: string;
   code: string;
@@ -5,6 +7,33 @@ export interface SurveyQuestion {
   text_en: string;
   answer_type: 'likert5' | 'nps' | 'yesno' | 'text' | 'vas';
   depends_on_code: string | null;
+  depends_on_operator?: DependsOnOperator | null;
+  depends_on_value?: number | null;
+}
+
+/**
+ * Evaluates a branching gate: whether a question depending on `gateValue` should be visible.
+ * Defaults to the original yes/no-gate behavior (equals 1) when operator/threshold are unset,
+ * so existing Lab/Radiology/Pharmacy ancillary gates keep working unchanged.
+ */
+export function evaluateGate(gateValue: number | undefined, operator: DependsOnOperator | null | undefined, threshold: number | null | undefined): boolean {
+  if (gateValue === undefined) return false;
+  const t = threshold ?? 1;
+  switch (operator ?? 'eq') {
+    case 'neq':
+      return gateValue !== t;
+    case 'gt':
+      return gateValue > t;
+    case 'gte':
+      return gateValue >= t;
+    case 'lt':
+      return gateValue < t;
+    case 'lte':
+      return gateValue <= t;
+    case 'eq':
+    default:
+      return gateValue === t;
+  }
 }
 
 const LIKERT_LABELS: Record<'ar' | 'en', string[]> = {

@@ -174,6 +174,12 @@ CREATE TABLE IF NOT EXISTS questions (
   active INTEGER NOT NULL DEFAULT 1,
   sort_order INTEGER NOT NULL DEFAULT 0,
   depends_on_code TEXT,
+  -- Generalizes the gate from a hardcoded "yes" check to any comparison against the gate
+  -- question's numeric answer (eq/neq/gt/gte/lt/lte), so a follow-up can also fire on e.g. a
+  -- low rating or a specific multiple-choice value, not only a yes/no ancillary-service gate.
+  -- Defaults preserve the original yes/no gate semantics (answer equals 1) unchanged.
+  depends_on_operator TEXT NOT NULL DEFAULT 'eq',
+  depends_on_value REAL NOT NULL DEFAULT 1,
   -- Non-standard/local question, shown with a dagger marker in reports (vs. a core/standardized
   -- item comparable across facilities). Admin-created questions default to custom.
   is_custom INTEGER NOT NULL DEFAULT 0,

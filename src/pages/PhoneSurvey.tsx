@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../AuthContext';
 import type { Department } from '../types';
+import { evaluateGate, type DependsOnOperator } from '../components/SurveyQuestionCard';
 
 type AgeBand = '<18' | '18-40' | '41-65' | '65+';
 const AGE_BAND_LABELS: Record<AgeBand, string> = { '<18': 'أقل من 18', '18-40': '18-40', '41-65': '41-65', '65+': '65 فأكثر' };
@@ -12,6 +13,8 @@ interface TemplateQuestion {
   text_ar: string;
   answer_type: 'likert5' | 'nps' | 'yesno' | 'text' | 'vas';
   depends_on_code: string | null;
+  depends_on_operator?: DependsOnOperator | null;
+  depends_on_value?: number | null;
 }
 
 interface Template {
@@ -50,7 +53,7 @@ export default function PhoneSurvey() {
   const isVisible = (q: TemplateQuestion): boolean => {
     if (!q.depends_on_code) return true;
     const gateId = idByCode[q.depends_on_code];
-    return answers[gateId] === 1;
+    return evaluateGate(answers[gateId], q.depends_on_operator, q.depends_on_value);
   };
   const visibleQuestions = (template?.questions ?? []).filter(isVisible);
 

@@ -46,6 +46,13 @@ export type InvitationChannel = 'sms' | 'whatsapp' | 'phone' | 'email';
 export type AgeBand = '<18' | '18-40' | '41-65' | '65+';
 export const AGE_BANDS: AgeBand[] = ['<18', '18-40', '41-65', '65+'];
 
+// Generalized branching-gate comparison (extends the original hardcoded "gate answer equals
+// yes" check): a question with depends_on_code becomes visible only when the gate question's
+// numeric answer satisfies depends_on_operator against depends_on_value. Covers both the
+// original yes/no ancillary gates (eq 1) and richer conditions like "only if rated low" (lte 2).
+export type DependsOnOperator = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte';
+export const DEPENDS_ON_OPERATORS: DependsOnOperator[] = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte'];
+
 export type InvitationStatus = 'pending' | 'sent' | 'opened' | 'completed' | 'expired';
 
 export type CommentSentiment = 'positive' | 'negative' | 'neutral' | 'mixed';

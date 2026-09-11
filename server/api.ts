@@ -48,7 +48,16 @@ import { sendCsv, sendXlsx, type ExportCell } from './export.ts';
 import { defaultBackupDir, listBackups, runBackup } from './backup.ts';
 import { buildAuthorizationUrl, discoverOidcConfig, exchangeCodeForTokens, generatePkcePair, verifyIdToken } from './sso.ts';
 import { buildEnrollmentQrCode, consumeRecoveryCode, createMfaSecret, generateRecoveryCodes, verifyMfaToken } from './mfa.ts';
-import { AGE_BANDS, type AgeBand, type AnswerType, type RecoveryStatus, type Role, type ServiceType } from './types.ts';
+import {
+  AGE_BANDS,
+  DEPENDS_ON_OPERATORS,
+  type AgeBand,
+  type AnswerType,
+  type DependsOnOperator,
+  type RecoveryStatus,
+  type Role,
+  type ServiceType
+} from './types.ts';
 
 function uid(): string {
   return randomUUID();
@@ -460,7 +469,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
 
     const questions = db
       .prepare(
-        `SELECT q.id, q.code, q.text_ar, q.text_en, q.answer_type, q.depends_on_code
+        `SELECT q.id, q.code, q.text_ar, q.text_en, q.answer_type, q.depends_on_code, q.depends_on_operator, q.depends_on_value
          FROM template_questions tq
          JOIN questions q ON q.id = tq.question_id
          WHERE tq.template_id = ?
@@ -473,6 +482,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       text_en: string;
       answer_type: string;
       depends_on_code: string | null;
+      depends_on_operator: string;
+      depends_on_value: number;
     }[];
 
     res.json({
@@ -594,7 +605,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       .get(kiosk.template_id) as { name_ar: string; name_en: string; service_type: string };
     const questions = db
       .prepare(
-        `SELECT q.id, q.code, q.text_ar, q.text_en, q.answer_type, q.depends_on_code
+        `SELECT q.id, q.code, q.text_ar, q.text_en, q.answer_type, q.depends_on_code, q.depends_on_operator, q.depends_on_value
          FROM template_questions tq
          JOIN questions q ON q.id = tq.question_id
          WHERE tq.template_id = ? AND q.active = 1
@@ -607,6 +618,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       text_en: string;
       answer_type: string;
       depends_on_code: string | null;
+      depends_on_operator: string;
+      depends_on_value: number;
     }[];
     res.json({
       templateName: template.name_ar,
@@ -1668,19 +1681,27 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
   );
 
   router.post('/question-bank/questions', requireRole('SystemAdmin'), express.json({ limit: '8kb' }), (req: Request, res: Response) => {
-    const { code, domainId, textAr, textEn, type, requiresAlert, dependsOnCode, isCustom, cahpsItem } = req.body as {
-      code?: string;
-      domainId?: string;
-      textAr?: string;
-      textEn?: string;
-      type?: AnswerType;
-      requiresAlert?: boolean;
-      dependsOnCode?: string;
-      isCustom?: boolean;
-      cahpsItem?: boolean;
-    };
+    const { code, domainId, textAr, textEn, type, requiresAlert, dependsOnCode, dependsOnOperator, dependsOnValue, isCustom, cahpsItem } =
+      req.body as {
+        code?: string;
+        domainId?: string;
+        textAr?: string;
+        textEn?: string;
+        type?: AnswerType;
+        requiresAlert?: boolean;
+        dependsOnCode?: string;
+        dependsOnOperator?: string;
+        dependsOnValue?: number;
+        isCustom?: boolean;
+        cahpsItem?: boolean;
+      };
     if (!code || !domainId || !textAr || !textEn || !type) {
       res.status(400).json({ error: 'invalid_payload' });
+      return;
+    }
+    const operator = dependsOnOperator ?? 'eq';
+    if (!DEPENDS_ON_OPERATORS.includes(operator as DependsOnOperator)) {
+      res.status(400).json({ error: 'invalid_operator' });
       return;
     }
     const domain = db.prepare('SELECT id, service_type FROM question_domains WHERE id = ? AND tenant_id = ?').get(domainId, req.user!.tenantId) as
@@ -1701,8 +1722,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     try {
       db.prepare(
         `INSERT INTO questions
-         (id, tenant_id, code, domain_id, text_ar, text_en, answer_type, service_type, requires_alert, sort_order, depends_on_code, is_custom, cahps_item)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, tenant_id, code, domain_id, text_ar, text_en, answer_type, service_type, requires_alert, sort_order, depends_on_code, depends_on_operator, depends_on_value, is_custom, cahps_item)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         // Admin-created questions default to "custom" (dagger-marked in reports) since they are
         // local additions, not part of the standardized core bank — the admin can override this.
       ).run(
@@ -1717,6 +1738,8 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
         requiresAlert ? 1 : 0,
         nextSortOrder,
         dependsOnCode ?? null,
+        operator,
+        dependsOnValue ?? 1,
         isCustom === false ? 0 : 1,
         cahpsItem ? 1 : 0
       );
@@ -1904,7 +1927,7 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
       ...t,
       questions: db
         .prepare(
-          `SELECT q.id, q.code, q.text_ar, q.text_en, q.answer_type, q.depends_on_code
+          `SELECT q.id, q.code, q.text_ar, q.text_en, q.answer_type, q.depends_on_code, q.depends_on_operator, q.depends_on_value
            FROM template_questions tq JOIN questions q ON q.id = tq.question_id
            WHERE tq.template_id = ? AND q.active = 1 ORDER BY tq.sort_order`
         )
