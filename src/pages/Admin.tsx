@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { ROLE_LABELS_AR, SERVICE_LABELS_AR, type Department, type Role, type ServiceType } from '../types';
 
-type AnswerType = 'likert5' | 'nps' | 'yesno' | 'text' | 'vas';
+type AnswerType = 'likert5' | 'nps' | 'yesno' | 'freq4' | 'text' | 'vas';
 
 const ANSWER_TYPE_LABELS_AR: Record<AnswerType, string> = {
   likert5: 'ليكرت (1-5)',
   nps: 'NPS (0-10)',
   yesno: 'نعم/لا',
+  freq4: 'تكرار (أبدًا/أحيانًا/غالبًا/دائمًا)',
   text: 'نص حر',
   vas: 'مقياس تناظري (0-10)'
 };

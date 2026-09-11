@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../AuthContext';
 import type { Department } from '../types';
-import { evaluateGate, type DependsOnOperator } from '../components/SurveyQuestionCard';
+import { evaluateGate, FREQ4_LABELS, FREQ4_VALUES, type DependsOnOperator } from '../components/SurveyQuestionCard';
 
 type AgeBand = '<18' | '18-40' | '41-65' | '65+';
 const AGE_BAND_LABELS: Record<AgeBand, string> = { '<18': 'أقل من 18', '18-40': '18-40', '41-65': '41-65', '65+': '65 فأكثر' };
@@ -11,7 +11,7 @@ interface TemplateQuestion {
   id: string;
   code: string;
   text_ar: string;
-  answer_type: 'likert5' | 'nps' | 'yesno' | 'text' | 'vas';
+  answer_type: 'likert5' | 'nps' | 'yesno' | 'freq4' | 'text' | 'vas';
   depends_on_code: string | null;
   depends_on_operator?: DependsOnOperator | null;
   depends_on_value?: number | null;
@@ -216,6 +216,22 @@ export default function PhoneSurvey() {
                       }`}
                     >
                       {value}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {q.answer_type === 'freq4' && (
+                <div className="flex gap-1">
+                  {FREQ4_LABELS.ar.map((label, i) => (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() => setAnswers((prev) => ({ ...prev, [q.id]: FREQ4_VALUES[i] }))}
+                      className={`flex-1 rounded-lg py-2 text-xs font-semibold transition ${
+                        answers[q.id] === FREQ4_VALUES[i] ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {label}
                     </button>
                   ))}
                 </div>

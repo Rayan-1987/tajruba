@@ -5,7 +5,7 @@ export interface SurveyQuestion {
   code: string;
   text_ar: string;
   text_en: string;
-  answer_type: 'likert5' | 'nps' | 'yesno' | 'text' | 'vas';
+  answer_type: 'likert5' | 'nps' | 'yesno' | 'freq4' | 'text' | 'vas';
   depends_on_code: string | null;
   depends_on_operator?: DependsOnOperator | null;
   depends_on_value?: number | null;
@@ -42,7 +42,68 @@ const LIKERT_LABELS: Record<'ar' | 'en', string[]> = {
 };
 const YES_NO_LABELS: Record<'ar' | 'en', [string, string]> = { ar: ['نعم', 'لا'], en: ['Yes', 'No'] };
 
+// Standard CAHPS 4-point frequency scale (used across real-world patient-experience surveys for
+// process items — "did staff explain X", "were you kept informed" — rather than a satisfaction
+// scale). Stored on values 1/2/4/5 (3 intentionally skipped) so "Always" lands on 5 and keeps
+// working unchanged with the existing topBoxPercent(>= 5)/mean scoring built for the 1-5 scale.
+export const FREQ4_LABELS: Record<'ar' | 'en', string[]> = {
+  ar: ['أبدًا', 'أحيانًا', 'غالبًا', 'دائمًا'],
+  en: ['Never', 'Sometimes', 'Usually', 'Always']
+};
+export const FREQ4_VALUES = [1, 2, 4, 5] as const;
+
+const NPS_ENDPOINT_LABELS: Record<'ar' | 'en', [string, string]> = {
+  ar: ['غير محتمل إطلاقًا', 'محتمل جدًا'],
+  en: ['Not at all likely', 'Extremely likely']
+};
+
 const FOCUS_RING = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600';
+
+/** A full-width, clearly-labeled option row — the shared answering interaction for every
+ * scale-type question (yes/no, 1-5 satisfaction, 4-point frequency), so patients learn one tap
+ * pattern for the whole survey instead of a different tiny-button layout per question type. */
+function OptionRow({
+  label,
+  chip,
+  selected,
+  accentColor,
+  onClick
+}: {
+  label: string;
+  chip?: string;
+  selected: boolean;
+  accentColor?: string;
+  onClick: () => void;
+}) {
+  const selectedStyle = selected && accentColor ? { backgroundColor: accentColor, borderColor: accentColor } : undefined;
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      onClick={onClick}
+      style={selectedStyle}
+      className={`flex w-full items-center gap-3 rounded-xl border-2 px-4 py-3.5 text-start text-sm font-semibold transition ${FOCUS_RING} ${
+        selected
+          ? accentColor
+            ? 'text-white'
+            : 'border-emerald-500 bg-emerald-500 text-white'
+          : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-slate-100'
+      }`}
+    >
+      {chip && (
+        <span
+          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+            selected ? 'bg-white/25 text-white' : 'bg-white text-slate-500'
+          }`}
+        >
+          {chip}
+        </span>
+      )}
+      <span>{label}</span>
+    </button>
+  );
+}
 
 export function SurveyQuestionCard({
   question,
@@ -61,6 +122,7 @@ export function SurveyQuestionCard({
   onSelectWithClear: (value: number) => void;
 }) {
   const [yesLabel, noLabel] = YES_NO_LABELS[language];
+  const [npsLowLabel, npsHighLabel] = NPS_ENDPOINT_LABELS[language];
   const headingId = `q-${question.id}`;
   const questionText = language === 'en' ? question.text_en : question.text_ar;
   const selectedClass = (selected: boolean) =>
@@ -72,64 +134,60 @@ export function SurveyQuestionCard({
         {questionText}
       </p>
       {question.answer_type === 'yesno' && (
-        <div className="flex gap-2" role="radiogroup" aria-labelledby={headingId}>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={value === 1}
-            onClick={() => onSelect(1)}
-            style={selectedStyle(value === 1)}
-            className={`flex-1 rounded-xl py-3 text-sm font-semibold transition ${FOCUS_RING} ${selectedClass(value === 1)}`}
-          >
-            {yesLabel}
-          </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={value === 0}
-            onClick={() => onSelectWithClear(0)}
-            style={selectedStyle(value === 0)}
-            className={`flex-1 rounded-xl py-3 text-sm font-semibold transition ${FOCUS_RING} ${selectedClass(value === 0)}`}
-          >
-            {noLabel}
-          </button>
+        <div className="flex flex-col gap-2" role="radiogroup" aria-labelledby={headingId}>
+          <OptionRow label={yesLabel} selected={value === 1} accentColor={accentColor} onClick={() => onSelect(1)} />
+          <OptionRow label={noLabel} selected={value === 0} accentColor={accentColor} onClick={() => onSelectWithClear(0)} />
         </div>
       )}
       {question.answer_type === 'likert5' && (
-        <div className="flex justify-between gap-1" role="radiogroup" aria-labelledby={headingId}>
+        <div className="flex flex-col gap-2" role="radiogroup" aria-labelledby={headingId}>
           {[1, 2, 3, 4, 5].map((v) => (
-            <button
+            <OptionRow
               key={v}
-              type="button"
-              role="radio"
-              aria-checked={value === v}
-              aria-label={LIKERT_LABELS[language][v - 1]}
+              label={LIKERT_LABELS[language][v - 1]}
+              chip={String(v)}
+              selected={value === v}
+              accentColor={accentColor}
               onClick={() => onSelect(v)}
-              style={selectedStyle(value === v)}
-              className={`flex-1 rounded-xl py-3 text-sm font-semibold transition ${FOCUS_RING} ${selectedClass(value === v)}`}
-              title={LIKERT_LABELS[language][v - 1]}
-            >
-              {v}
-            </button>
+            />
+          ))}
+        </div>
+      )}
+      {question.answer_type === 'freq4' && (
+        <div className="flex flex-col gap-2" role="radiogroup" aria-labelledby={headingId}>
+          {FREQ4_VALUES.map((v, i) => (
+            <OptionRow
+              key={v}
+              label={FREQ4_LABELS[language][i]}
+              selected={value === v}
+              accentColor={accentColor}
+              onClick={() => onSelect(v)}
+            />
           ))}
         </div>
       )}
       {question.answer_type === 'nps' && (
-        <div className="grid grid-cols-11 gap-1" role="radiogroup" aria-labelledby={headingId}>
-          {Array.from({ length: 11 }, (_, i) => i).map((v) => (
-            <button
-              key={v}
-              type="button"
-              role="radio"
-              aria-checked={value === v}
-              aria-label={language === 'en' ? `${v} out of 10` : `${v} من 10`}
-              onClick={() => onSelect(v)}
-              style={selectedStyle(value === v)}
-              className={`rounded-lg py-2 text-xs font-semibold transition ${FOCUS_RING} ${selectedClass(value === v)}`}
-            >
-              {v}
-            </button>
-          ))}
+        <div role="radiogroup" aria-labelledby={headingId}>
+          <div className="grid grid-cols-11 gap-1">
+            {Array.from({ length: 11 }, (_, i) => i).map((v) => (
+              <button
+                key={v}
+                type="button"
+                role="radio"
+                aria-checked={value === v}
+                aria-label={language === 'en' ? `${v} out of 10` : `${v} من 10`}
+                onClick={() => onSelect(v)}
+                style={selectedStyle(value === v)}
+                className={`rounded-lg py-2.5 text-xs font-semibold transition ${FOCUS_RING} ${selectedClass(value === v)}`}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+          <div className="mt-1.5 flex justify-between text-[11px] text-slate-400">
+            <span>{npsLowLabel}</span>
+            <span>{npsHighLabel}</span>
+          </div>
         </div>
       )}
     </div>

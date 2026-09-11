@@ -33,7 +33,9 @@ export const ANCILLARY_LABELS_AR: Record<AncillaryService, string> = {
   PHARM: 'الصيدلية'
 };
 
-export type AnswerType = 'likert5' | 'nps' | 'yesno' | 'text' | 'vas';
+// 'freq4' is the standard CAHPS 4-point frequency scale (Never/Sometimes/Usually/Always) used
+// for process-type items, alongside the 1-5 satisfaction scale ('likert5') used for rating items.
+export type AnswerType = 'likert5' | 'nps' | 'yesno' | 'freq4' | 'text' | 'vas';
 
 export type InvitationChannel = 'sms' | 'whatsapp' | 'phone' | 'email';
 

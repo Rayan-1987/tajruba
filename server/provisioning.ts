@@ -267,15 +267,32 @@ export function provisionTenantDefaults(db: Db, root: string, tenantId: string):
     const questionsForService = bank.questions.filter(
       (q) => bank.domains.find((d) => d.code === q.domain)!.service === service
     );
+    // Patient-journey section order: pull the wait-time Access domain and the inclusion/
+    // accessibility domain (which authoring keeps in a separate block far from its sibling, so
+    // raw file order buries it after every other section including Overall) to the front as one
+    // combined Access group, keep the rest of the clinical journey in its existing relative
+    // order, and always finish on Overall/NPS — matching the standard OPD survey flow (Access ->
+    // clinical journey -> ancillary services -> Overall Assessment). Array.sort is stable, so
+    // equal-weight groups keep their original relative order.
+    const sectionWeight = (domainCode: string): number => {
+      if (domainCode.endsWith('_OVR')) return 2;
+      if (domainCode.endsWith('_ACC') || domainCode.endsWith('_ACCESS')) return 0;
+      return 1;
+    };
+    const sortedQuestions = questionsForService.slice().sort((a, b) => sectionWeight(a.domain) - sectionWeight(b.domain));
+    const overallQuestions = sortedQuestions.filter((q) => sectionWeight(q.domain) === 2);
+    const journeyQuestions = sortedQuestions.filter((q) => sectionWeight(q.domain) !== 2);
+
     let sortOrder = 0;
-    questionsForService.forEach((q) => {
+    journeyQuestions.forEach((q) => {
       insertTemplateQuestion.run(uid(), id, questionIds[q.code], sortOrder);
       sortOrder += 1;
     });
 
     // Ancillary (Lab/Radiology/Pharmacy) gated follow-up questions — only appended where the
-    // ancillary is a plausible touchpoint for this service line (see applicableServices),
-    // not blindly to every service regardless of whether the combination makes sense.
+    // ancillary is a plausible touchpoint for this service line (see applicableServices), not
+    // blindly to every service regardless of whether the combination makes sense. Inserted here,
+    // before Overall/NPS, so the closing "how was your visit overall" question really is last.
     for (const ancillary of ancillaryServices.filter((a) => a.applicableServices.includes(service))) {
       const domainCode = `${service}_${ancillary.code}`;
       const domainId = uid();
@@ -311,6 +328,11 @@ export function provisionTenantDefaults(db: Db, root: string, tenantId: string):
         sortOrder += 1;
       });
     }
+
+    overallQuestions.forEach((q) => {
+      insertTemplateQuestion.run(uid(), id, questionIds[q.code], sortOrder);
+      sortOrder += 1;
+    });
   }
 
   // --- PROMs instrument catalog ------------------------------------------
