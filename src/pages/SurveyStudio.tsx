@@ -28,6 +28,23 @@ interface KioskLink {
   template_name_ar: string;
 }
 
+interface RateBucket {
+  total: number;
+  completed: number;
+  notYetResponded: number;
+  failedToSend: number;
+  responseRatePercent: number | null;
+  deliveredResponseRatePercent: number | null;
+}
+
+interface ResponseRateReport {
+  overall: RateBucket;
+  byDepartment: (RateBucket & { departmentId: string; nameAr: string })[];
+  byChannel: (RateBucket & { channel: string })[];
+}
+
+const CHANNEL_LABELS_AR: Record<string, string> = { sms: 'SMS', whatsapp: 'واتساب', email: 'بريد إلكتروني' };
+
 export default function SurveyStudio() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -72,6 +89,8 @@ export default function SurveyStudio() {
         <h2 className="text-xl font-bold text-slate-800">استوديو الاستبيانات</h2>
         <p className="text-sm text-slate-500">قوالب الاستبيانات حسب الخدمة، وإرسال دعوات بالجملة لمرضى الخروج اليوم</p>
       </div>
+
+      <ResponseRateSection />
 
       <div className="rounded-2xl bg-white p-4 shadow-sm">
         <h3 className="mb-3 text-sm font-semibold text-slate-700">إرسال دعوات استبيان بالجملة</h3>
@@ -142,6 +161,77 @@ export default function SurveyStudio() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function ResponseRateSection() {
+  const [report, setReport] = useState<ResponseRateReport | null>(null);
+
+  useEffect(() => {
+    api.get<ResponseRateReport>('/reports/response-rate').then(setReport);
+  }, []);
+
+  if (!report) return null;
+
+  return (
+    <div className="rounded-2xl bg-white p-4 shadow-sm">
+      <h3 className="mb-1 text-sm font-semibold text-slate-700">مراقبة نسبة الاستجابة</h3>
+      <p className="mb-3 text-xs text-slate-500">
+        دعوات SMS/واتساب/البريد المرسلة فعلاً (يستثني الكشك والاستبيان الهاتفي، لأنهما يكتملان لحظة الإرسال). استخدمها
+        لتحديد حجم القائمة التي يحتاجها فريق الاتصال للمتابعة الهاتفية — لا تُظهر أرقام الجوال نفسها لحماية الخصوصية.
+      </p>
+      {report.overall.total === 0 ? (
+        <p className="text-xs text-slate-400">لا توجد دعوات استبيان مرسلة بعد.</p>
+      ) : (
+        <>
+          <div className="mb-4 flex flex-wrap gap-2">
+            <span className="rounded-full bg-emerald-100 px-3 py-1.5 text-xs font-bold text-emerald-700">
+              نسبة الاستجابة: {report.overall.responseRatePercent}%
+            </span>
+            <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600">
+              أُكمِل: {report.overall.completed} من {report.overall.total}
+            </span>
+            <span className="rounded-full bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-700">
+              بانتظار الاستجابة: {report.overall.notYetResponded}
+            </span>
+            {report.overall.failedToSend > 0 && (
+              <span className="rounded-full bg-red-100 px-3 py-1.5 text-xs font-semibold text-red-700">
+                فشل الإرسال: {report.overall.failedToSend}
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div>
+              <h4 className="mb-2 text-xs font-semibold text-slate-500">حسب القسم</h4>
+              <div className="space-y-1.5">
+                {report.byDepartment.map((d) => (
+                  <div key={d.departmentId} className="flex items-center justify-between text-xs">
+                    <span className="text-slate-600">{d.nameAr}</span>
+                    <span className="text-slate-500">
+                      <span className="font-semibold text-amber-700">{d.notYetResponded} بانتظار الاتصال</span> · {d.responseRatePercent}% استجابة
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div>
+              <h4 className="mb-2 text-xs font-semibold text-slate-500">حسب القناة</h4>
+              <div className="space-y-1.5">
+                {report.byChannel.map((c) => (
+                  <div key={c.channel} className="flex items-center justify-between text-xs">
+                    <span className="text-slate-600">{CHANNEL_LABELS_AR[c.channel] ?? c.channel}</span>
+                    <span className="text-slate-500">
+                      <span className="font-semibold text-amber-700">{c.notYetResponded} بانتظار الاتصال</span> · {c.responseRatePercent}% استجابة
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

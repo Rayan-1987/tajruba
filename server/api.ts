@@ -2609,6 +2609,88 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     res.json({ increases, declines });
   });
 
+  // Response-rate monitoring: how many survey invitations actually get completed, broken down by
+  // department and channel, so a call-center team knows where to focus follow-up calls. Only
+  // counts are exposed — patient_phone_hash is a one-way hash by design (RFP/privacy: the
+  // sampling frame never stores a reversible phone number), so this deliberately cannot produce
+  // a "here are the numbers to call" list. A hospital's own HIS/call list is the source for that;
+  // this tells them how large that list should be and where.
+  router.get('/reports/response-rate', (req: Request, res: Response) => {
+    const serviceType = req.query.serviceType as ServiceType | undefined;
+    const departmentId = req.query.departmentId as string | undefined;
+    if (req.user!.role === 'DepartmentManager' && departmentId && departmentId !== req.user!.departmentId) {
+      res.status(403).json({ error: 'forbidden' });
+      return;
+    }
+    const effectiveDeptId = req.user!.role === 'DepartmentManager' ? req.user!.departmentId : departmentId;
+
+    const filters: string[] = [];
+    const params: (string | number)[] = [req.user!.tenantId];
+    if (serviceType) {
+      filters.push('AND service_type = ?');
+      params.push(serviceType);
+    }
+    if (effectiveDeptId) {
+      filters.push('AND department_id = ?');
+      params.push(effectiveDeptId);
+    }
+    // Kiosk and phone-administered invitations are completed at creation time (no "invite, then
+    // wait for a response" step), so they would silently deflate a call-center response rate that
+    // is specifically about patients who were sent a link and have not yet acted on it.
+    filters.push("AND channel NOT IN ('kiosk', 'phone')");
+    const filterClause = filters.join(' ');
+
+    const rate = (rows: { total: number; completed: number; failedToSend: number }) => {
+      const delivered = rows.total - rows.failedToSend;
+      return {
+        total: rows.total,
+        completed: rows.completed,
+        notYetResponded: rows.total - rows.completed - rows.failedToSend,
+        failedToSend: rows.failedToSend,
+        responseRatePercent: rows.total > 0 ? round2((rows.completed / rows.total) * 100) : null,
+        deliveredResponseRatePercent: delivered > 0 ? round2((rows.completed / delivered) * 100) : null
+      };
+    };
+
+    const overallRow = db
+      .prepare(
+        `SELECT COUNT(*) as total,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as failedToSend
+         FROM survey_invitations WHERE tenant_id = ? ${filterClause}`
+      )
+      .get(...params) as { total: number; completed: number; failedToSend: number };
+
+    const byDepartmentRows = db
+      .prepare(
+        `SELECT d.id as departmentId, d.name_ar as nameAr,
+                COUNT(*) as total,
+                SUM(CASE WHEN si.status = 'completed' THEN 1 ELSE 0 END) as completed,
+                SUM(CASE WHEN si.status = 'pending' THEN 1 ELSE 0 END) as failedToSend
+         FROM survey_invitations si JOIN departments d ON d.id = si.department_id
+         WHERE si.tenant_id = ? ${filterClause}
+         GROUP BY d.id ORDER BY total DESC`
+      )
+      .all(...params) as { departmentId: string; nameAr: string; total: number; completed: number; failedToSend: number }[];
+
+    const byChannelRows = db
+      .prepare(
+        `SELECT channel,
+                COUNT(*) as total,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as failedToSend
+         FROM survey_invitations WHERE tenant_id = ? ${filterClause}
+         GROUP BY channel ORDER BY total DESC`
+      )
+      .all(...params) as { channel: string; total: number; completed: number; failedToSend: number }[];
+
+    res.json({
+      overall: rate(overallRow),
+      byDepartment: byDepartmentRows.map((r) => ({ departmentId: r.departmentId, nameAr: r.nameAr, ...rate(r) })),
+      byChannel: byChannelRows.map((r) => ({ channel: r.channel, ...rate(r) }))
+    });
+  });
+
   // Department Insights Assistant ("خدمة الاستفسار عن قسم معين"): one department's PREMs domain
   // scores, comment sentiment/category mix, service-recovery load, and QI project status,
   // synthesized into a short list of rule-based findings. Not a live model call — this codebase
