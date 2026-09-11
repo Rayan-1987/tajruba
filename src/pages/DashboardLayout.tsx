@@ -13,6 +13,7 @@ const NAV_ITEMS: { to: string; label: string; roles?: Role[]; badgeKey?: 'commen
     label: 'تحسين الجودة (FOCUS-PDCA)',
     roles: ['SystemAdmin', 'QualityManager', 'DepartmentManager']
   },
+  { to: '/dashboard/department-insights', label: 'الاستفسار عن قسم' },
   { to: '/dashboard/proms', label: 'النتائج الصحية (PROMs)' },
   { to: '/dashboard/employee-experience', label: 'تجربة الموظف', roles: ['SystemAdmin', 'QualityManager', 'ExecutiveViewer', 'DepartmentManager'] },
   { to: '/dashboard/phone-survey', label: 'استبيان هاتفي' },

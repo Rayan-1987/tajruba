@@ -50,6 +50,7 @@ import { buildAuthorizationUrl, discoverOidcConfig, exchangeCodeForTokens, gener
 import { buildEnrollmentQrCode, consumeRecoveryCode, createMfaSecret, generateRecoveryCodes, verifyMfaToken } from './mfa.ts';
 import {
   AGE_BANDS,
+  CATEGORY_LABELS_AR,
   DEPENDS_ON_OPERATORS,
   QI_PHASE_CODES,
   type AgeBand,
@@ -2606,6 +2607,155 @@ export function createApi(db: Db, _sessionSecret: string, root: string): Router 
     const declines = [...movers].sort((a, b) => (a.change ?? 0) - (b.change ?? 0)).slice(0, 5);
 
     res.json({ increases, declines });
+  });
+
+  // Department Insights Assistant ("خدمة الاستفسار عن قسم معين"): one department's PREMs domain
+  // scores, comment sentiment/category mix, service-recovery load, and QI project status,
+  // synthesized into a short list of rule-based findings. Not a live model call — this codebase
+  // has none (see comments.ts's RuleBasedAnalyzer for the same deterministic-analysis precedent)
+  // — so a manager gets a fast "what's going on in this department" read without cross-referencing
+  // four separate screens, and a nudge to open a QI project when a weak domain has none yet.
+  router.get('/department-insights/:departmentId', (req: Request, res: Response) => {
+    const departmentId = req.params.departmentId;
+    if (req.user!.role === 'DepartmentManager' && departmentId !== req.user!.departmentId) {
+      res.status(403).json({ error: 'forbidden' });
+      return;
+    }
+    const department = db
+      .prepare('SELECT id, name_ar, name_en, service_type FROM departments WHERE id = ? AND tenant_id = ?')
+      .get(departmentId, req.user!.tenantId) as { id: string; name_ar: string; name_en: string; service_type: ServiceType } | undefined;
+    if (!department) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+
+    const windows = rollingWindows();
+
+    const domains = db
+      .prepare(
+        `SELECT id, code, name_ar, name_en, benchmark_top_box_percent, target_top_box_percent FROM question_domains
+         WHERE tenant_id = ? AND service_type = ? AND active = 1`
+      )
+      .all(req.user!.tenantId, department.service_type) as {
+      id: string;
+      code: string;
+      name_ar: string;
+      name_en: string;
+      benchmark_top_box_percent: number;
+      target_top_box_percent: number | null;
+    }[];
+
+    const domainScores = domains.map((domain) => {
+      const scorableQuestionIds = (
+        db.prepare('SELECT id, answer_type FROM questions WHERE domain_id = ? AND active = 1').all(domain.id) as {
+          id: string;
+          answer_type: AnswerType;
+        }[]
+      ).filter((q) => q.answer_type !== 'nps' && q.answer_type !== 'yesno');
+      const values = scorableQuestionIds.flatMap((q) =>
+        fetchQuestionValues(req.user!.tenantId, q.id, departmentId, windows.curFrom, windows.curTo)
+      );
+      const score = scoreDomain(domain.id, values, domain.benchmark_top_box_percent);
+      return {
+        domainId: domain.id,
+        nameAr: domain.name_ar,
+        nameEn: domain.name_en,
+        n: score.n,
+        topBoxPercent: score.topBoxPercent,
+        benchmarkTopBoxPercent: domain.benchmark_top_box_percent,
+        diffPercentPoints: score.diffPercentPoints,
+        targetTopBoxPercent: domain.target_top_box_percent,
+        targetStatus: targetStatus(score.topBoxPercent, domain.target_top_box_percent)
+      };
+    });
+
+    const commentRows = db
+      .prepare(
+        `SELECT ca.sentiment, ca.category FROM comments c
+         JOIN comment_analyses ca ON ca.comment_id = c.id
+         WHERE c.tenant_id = ? AND c.department_id = ? AND c.created_at >= ?`
+      )
+      .all(req.user!.tenantId, departmentId, windows.curFrom) as { sentiment: string; category: string }[];
+    const sentimentCounts: Record<string, number> = {};
+    const categoryCounts: Record<string, number> = {};
+    for (const row of commentRows) {
+      sentimentCounts[row.sentiment] = (sentimentCounts[row.sentiment] ?? 0) + 1;
+      categoryCounts[row.category] = (categoryCounts[row.category] ?? 0) + 1;
+    }
+    const topCategory = Object.entries(categoryCounts).sort((a, b) => b[1] - a[1])[0] as [string, number] | undefined;
+
+    const caseCounts = db
+      .prepare(
+        `SELECT
+           SUM(CASE WHEN status != 'closed' THEN 1 ELSE 0 END) as openCases,
+           SUM(CASE WHEN status != 'closed' AND due_at IS NOT NULL AND due_at < datetime('now') THEN 1 ELSE 0 END) as overdueCases,
+           SUM(CASE WHEN escalation_level > 0 AND status != 'closed' THEN 1 ELSE 0 END) as escalatedCases
+         FROM service_recovery_cases WHERE tenant_id = ? AND department_id = ?`
+      )
+      .get(req.user!.tenantId, departmentId) as { openCases: number | null; overdueCases: number | null; escalatedCases: number | null };
+
+    const qiProjects = db
+      .prepare(
+        `SELECT p.id, p.title, p.status,
+                (SELECT COUNT(*) FROM qi_project_phases ph WHERE ph.project_id = p.id AND ph.status = 'done') as phasesDone
+         FROM qi_projects p WHERE p.tenant_id = ? AND p.department_id = ?`
+      )
+      .all(req.user!.tenantId, departmentId) as { id: string; title: string; status: string; phasesDone: number }[];
+    const activeQiProjects = qiProjects.filter((p) => p.status !== 'completed');
+
+    const findings: string[] = [];
+    const scoredDomains = domainScores.filter((d) => d.topBoxPercent != null);
+    const worstDomain = [...scoredDomains].sort((a, b) => (a.diffPercentPoints ?? 0) - (b.diffPercentPoints ?? 0))[0] as
+      | (typeof scoredDomains)[number]
+      | undefined;
+    if (worstDomain && (worstDomain.diffPercentPoints ?? 0) < 0) {
+      findings.push(
+        `أضعف محور: "${worstDomain.nameAr}" بنسبة Top Box ${worstDomain.topBoxPercent}% (أقل من المعيار الداخلي بـ ${Math.abs(
+          worstDomain.diffPercentPoints ?? 0
+        )} نقطة، n=${worstDomain.n}).`
+      );
+    }
+    const belowTargetCount = scoredDomains.filter((d) => d.targetStatus === 'below').length;
+    if (belowTargetCount > 0) findings.push(`${belowTargetCount} محور دون الهدف المحدد له من الإدارة.`);
+    if (topCategory) {
+      const negativeCount = commentRows.filter((r) => r.sentiment === 'negative').length;
+      const categoryLabel = CATEGORY_LABELS_AR[topCategory[0] as keyof typeof CATEGORY_LABELS_AR] ?? topCategory[0];
+      findings.push(
+        `أكثر تصنيف تعليقات تكرارًا: "${categoryLabel}" (${topCategory[1]} من ${commentRows.length} تعليقًا خلال آخر 3 أشهر، ${negativeCount} منها سلبي).`
+      );
+    }
+    if ((caseCounts.openCases ?? 0) > 0) {
+      findings.push(
+        `${caseCounts.openCases} حالة استعادة خدمة مفتوحة${caseCounts.overdueCases ? `، ${caseCounts.overdueCases} منها متأخرة عن الموعد` : ''}${
+          caseCounts.escalatedCases ? `، ${caseCounts.escalatedCases} مُصعَّدة` : ''
+        }.`
+      );
+    }
+    const worstDomainIsWeak = !!worstDomain && (worstDomain.diffPercentPoints ?? 0) < -5;
+    if (activeQiProjects.length > 0) {
+      findings.push(
+        `${activeQiProjects.length} مشروع تحسين جودة نشط لهذا القسم (${activeQiProjects.map((p) => `${p.title}: ${p.phasesDone}/9`).join('، ')}).`
+      );
+    } else if (worstDomainIsWeak) {
+      findings.push('لا يوجد مشروع تحسين جودة مفتوح لهذا القسم رغم وجود محور أداء ضعيف — يُنصح بفتح مشروع FOCUS-PDCA.');
+    }
+    if (findings.length === 0) findings.push('لا توجد مؤشرات سلبية بارزة لهذا القسم في آخر 3 أشهر.');
+
+    res.json({
+      department: { id: department.id, nameAr: department.name_ar, nameEn: department.name_en, serviceType: department.service_type },
+      domainScores,
+      sentimentCounts,
+      categoryCounts,
+      commentCount: commentRows.length,
+      serviceRecovery: {
+        openCases: caseCounts.openCases ?? 0,
+        overdueCases: caseCounts.overdueCases ?? 0,
+        escalatedCases: caseCounts.escalatedCases ?? 0
+      },
+      qiProjects,
+      findings,
+      recommendQiProject: activeQiProjects.length === 0 && worstDomainIsWeak
+    });
   });
 
   // Report parameters/audit block: the filters, thresholds and facility scope in effect for

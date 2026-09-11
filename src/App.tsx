@@ -26,6 +26,7 @@ import Security from './pages/Security';
 import Admin from './pages/Admin';
 import EmployeeExperience from './pages/EmployeeExperience';
 import QualityImprovement from './pages/QualityImprovement';
+import DepartmentInsights from './pages/DepartmentInsights';
 
 function ProtectedRoutes({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -99,6 +100,7 @@ export default function App() {
         <Route path="proms" element={<PromsMonitor />} />
         <Route path="employee-experience" element={<EmployeeExperience />} />
         <Route path="quality-improvement" element={<QualityImprovement />} />
+        <Route path="department-insights" element={<DepartmentInsights />} />
         <Route path="phone-survey" element={<PhoneSurvey />} />
         <Route path="security" element={<Security />} />
         <Route
